@@ -390,11 +390,17 @@ class NovaBrain:
         if intent in ("CREATE_FOLDER", "NEW_FOLDER"):
             name = step.get("name", "").strip().strip("'\" ")
             parent = step.get("parent")
-            if parent:
+            if context.get("last_folder"):
+                last_p = Path(context["last_folder"])
+                if parent and parent.strip().strip("'\" ").lower() == last_p.name.lower():
+                    parent = str(last_p)
+                elif parent:
+                    parent = parent.strip().strip("'\" ")
+            elif parent:
                 parent = parent.strip().strip("'\" ")
             res = self.file_manager.create_folder(folder_name=name, parent_name=parent)
             if res.get("success"):
-                context["last_folder"] = name
+                context["last_folder"] = res.get("path", name)
             return {
                 "intent": NovaIntent.CREATE_FOLDER,
                 "success": res.get("success", False),
@@ -406,9 +412,15 @@ class NovaBrain:
             name = step.get("name", "").strip().strip("'\" ")
             content = step.get("content", "")
             parent = step.get("parent")
-            # If parent is not explicitly provided, use the last created or active folder from context
-            if not parent and context.get("last_folder"):
-                parent = context["last_folder"]
+            # If parent is not explicitly provided, or matches the last created folder's name, use the exact path
+            if context.get("last_folder"):
+                last_p = Path(context["last_folder"])
+                if not parent:
+                    parent = str(last_p)
+                elif parent and parent.strip().strip("'\" ").lower() == last_p.name.lower():
+                    parent = str(last_p)
+                else:
+                    parent = parent.strip().strip("'\" ")
             elif parent:
                 parent = parent.strip().strip("'\" ")
 
@@ -663,7 +675,7 @@ class NovaBrain:
                 parent_name=parsed.get("parent"),
             )
             if res["success"]:
-                self._last_context["last_folder"] = parsed["name"]
+                self._last_context["last_folder"] = res.get("path", parsed["name"])
                 result = {
                     "intent": NovaIntent.CREATE_FOLDER,
                     "success": True,
@@ -937,16 +949,57 @@ class NovaBrain:
         # 13. Help
         elif intent == NovaIntent.HELP:
             help_text = (
-                "Nova Commands:\n"
-                " • Complex Commands: 'Make a folder Demo in Project folder and create a file xyz.txt'\n"
-                " • Summarization: 'summarize file report.txt', 'summarize context', 'summarize: <text>'\n"
-                " • Open Applications: 'open chrome', 'launch calculator', 'start notepad'\n"
-                " • Zero-path Files: 'create file todo.txt with content 'My note'', 'copy todo.txt to Backup'\n"
-                " • Zero-path Folders: 'create folder Projects', 'create folder Notes inside Projects'\n"
-                " • Rename: 'rename file old.txt to new.txt', 'rename folder OldProject to NewProject'\n"
-                " • Power: 'lock laptop', 'sleep laptop', 'restart laptop', 'shutdown laptop'\n"
-                " • Universal Search: 'find app spotify', 'find file report.pdf', 'find folder Documents'\n"
-                " • Architecture Chart: 'show language chart'\n"
+                "==========================================================================\n"
+                "               NOVA VIRTUAL ASSISTANT - COMMAND REFERENCE\n"
+                "==========================================================================\n\n"
+                "[APPLICATION MANAGEMENT]\n"
+                " • open <app>                   Launch any installed app (e.g. 'open chrome', 'start notepad')\n"
+                " • launch / run <app>           Synonyms for launch (e.g. 'launch calculator', 'run terminal')\n"
+                " • open app <name>              Explicit app targeting (e.g. 'open app spotify')\n\n"
+                "[ZERO-PATH FILE & FOLDER INTELLIGENCE]\n"
+                " • create folder <name>         Create in D: drive default (e.g. 'create folder Projects')\n"
+                " • create folder <name> in <p>  Create in specific folder (e.g. 'create folder Notes inside Projects')\n"
+                " • create file <name>           Create empty file in D: (e.g. 'create file todo.txt')\n"
+                " • create file <name> with...   Create with text (e.g. 'create file notes.txt with content 'Hi'')\n"
+                " • create file ... inside <p>   Create in specific folder (e.g. 'create file log.txt inside Logs')\n"
+                " • rename file/folder <a> to <b> Rename anywhere on PC (e.g. 'rename file draft.txt to final.txt')\n"
+                " • copy file/folder <a> to <dest> Auto-resolves destination (e.g. 'copy file report.pdf to Backup')\n"
+                " • move file/folder <a> to <dest> Auto-resolves destination (e.g. 'move file data.csv to Archive')\n"
+                " • delete file/folder <name>    Safe delete to Recycle Bin (e.g. 'delete file temp.log')\n"
+                " • delete ... permanently       Permanent deletion (e.g. 'delete folder Cache permanently')\n"
+                " * Disambiguation & Confirmation: If duplicate names exist across drives, Nova asks you\n"
+                "   to select the exact path [1-N] and confirms before deleting.\n\n"
+                "[UNIVERSAL OPEN (APPS, FILES & FOLDERS)]\n"
+                " • open <name>                  Discovers and opens matching app, file, or folder\n"
+                " • open file / open folder <n>  Explicit type filtering (e.g. 'open file budget.xlsx')\n"
+                " * Disambiguation: If multiple items match, Nova displays choices and confirms before opening.\n\n"
+                "[UNIVERSAL SEARCH & DISCOVERY]\n"
+                " • find app <name>              Search installed applications (e.g. 'find app spotify')\n"
+                " • find file <name>             Search files across all drives (e.g. 'find file budget.xlsx')\n"
+                " • find folder <name>           Search directories across drives (e.g. 'find folder Documents')\n"
+                " • find / search <query>        Search everything across all logical drives\n\n"
+                "[COMPLEX & COMPOUND COMMANDS]\n"
+                " • Multi-step chaining          Connect actions with 'and', 'then', 'and then', or ';'\n"
+                "   Examples:\n"
+                "   - 'Make a folder Demo in Project folder and create a file xyz.txt'\n"
+                "   - 'Create folder TestSuite in D: drive and create file results.txt with content 'Passed' inside TestSuite'\n"
+                "   - 'create folder Vault then create file keys.txt inside Vault'\n\n"
+                "[SUMMARIZATION (100% Local & Offline - Zero API Keys)]\n"
+                " • summarize this text: <text>  Summarize direct text via local Ollama or offline fallback\n"
+                " • summarize file <filename>    Extract & summarize contents of any document or file\n"
+                " • summarize context            Summarize conversational and session action history\n\n"
+                "[SYSTEM POWER & SESSION CONTROL]\n"
+                " • lock laptop                  Lock Windows workstation screen\n"
+                " • sleep laptop                 Put system into standby / sleep\n"
+                " • restart laptop [in X sec]    Restart system with optional countdown timer\n"
+                " • shutdown laptop [in X sec]   Power off system with optional countdown timer\n"
+                " • cancel shutdown              Abort scheduled shutdown or restart\n"
+                " • battery status               Display battery percentage, status, and remaining time\n\n"
+                "[ARCHITECTURE & TECH STACK]\n"
+                " • show language chart          Display 24-component JARVIS language architecture chart\n\n"
+                "[SESSION CONTROL]\n"
+                " • help                         Display this command reference manual\n"
+                " • exit / quit                  Shut down Nova session"
             )
             result = {
                 "intent": NovaIntent.HELP,

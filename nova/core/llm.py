@@ -173,6 +173,8 @@ class OllamaClient:
             "12. LANGUAGE_CHART: {\"intent\": \"LANGUAGE_CHART\"}\n\n"
             "Context rules:\n"
             "- If a command creates a folder 'X' in 'Y', and then creates a file 'Z', the file 'Z' parent is usually 'X' unless specified otherwise.\n"
+            "- If user specifies 'in D: drive', 'in D:', or creates a top-level folder, set parent to null (or 'D:/'), NEVER use previous context.\n"
+            "- Only inherit previous context when user refers to 'it', 'that folder', or when a file has no specified parent.\n"
             "- Strip surrounding quotes from names.\n"
             "- Return JSON with key 'steps' containing the ordered array of action objects.\n"
             "Example output: {\"steps\": [{\"intent\": \"CREATE_FOLDER\", \"name\": \"Demo\", \"parent\": \"Project\"}, {\"intent\": \"CREATE_FILE\", \"name\": \"xyz.txt\", \"parent\": \"Demo\", \"content\": \"\"}]}"

@@ -12,6 +12,13 @@ from nova.agent.brain import NovaBrain
 from nova.agent.intent_parser import NovaIntent
 from nova.config import LANGUAGE_CHART
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 
 BANNER = r"""
 ==========================================================================

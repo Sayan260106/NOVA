@@ -348,24 +348,32 @@ class FileManager:
         resolved_parent_msg = f"D: drive ({DEFAULT_WORKSPACE})" if str(DEFAULT_WORKSPACE).startswith("D:") else "default workspace"
 
         if parent_name:
-            clean_parent = re.sub(r"\s+(folder|directory|dir)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ")
-            resolved = self.resolve_target(clean_parent, is_dir=True)
-            if resolved and resolved.is_dir():
-                target_parent = resolved
-                resolved_parent_msg = f"'{resolved.name}' at {resolved}"
+            clean_parent = re.sub(r"\s+(folder|directory|dir|drive)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ")
+            lower_clean = clean_parent.lower().rstrip(":")
+            if lower_clean in ("d", "d drive") or clean_parent.lower() in ("d:", "d: drive"):
+                target_parent = DEFAULT_WORKSPACE
+                resolved_parent_msg = f"D: drive ({DEFAULT_WORKSPACE})"
+            elif os.path.isabs(clean_parent) and Path(clean_parent).is_dir():
+                target_parent = Path(clean_parent).resolve()
+                resolved_parent_msg = f"'{target_parent.name}' at {target_parent}"
             else:
-                # If parent folder does not exist, auto-create it in DEFAULT_WORKSPACE
-                try:
-                    auto_parent = DEFAULT_WORKSPACE / clean_parent
-                    auto_parent.mkdir(parents=True, exist_ok=True)
-                    self.indexer.record_item(auto_parent)
-                    target_parent = auto_parent
-                    resolved_parent_msg = f"'{auto_parent.name}' at {auto_parent}"
-                except Exception:
-                    return {
-                        "success": False,
-                        "error": f"Parent folder '{parent_name}' could not be located or created.",
-                    }
+                resolved = self.resolve_target(clean_parent, is_dir=True)
+                if resolved and resolved.is_dir():
+                    target_parent = resolved
+                    resolved_parent_msg = f"'{resolved.name}' at {resolved}"
+                else:
+                    # If parent folder does not exist, auto-create it in DEFAULT_WORKSPACE
+                    try:
+                        auto_parent = DEFAULT_WORKSPACE / clean_parent
+                        auto_parent.mkdir(parents=True, exist_ok=True)
+                        self.indexer.record_item(auto_parent)
+                        target_parent = auto_parent
+                        resolved_parent_msg = f"'{auto_parent.name}' at {auto_parent}"
+                    except Exception:
+                        return {
+                            "success": False,
+                            "error": f"Parent folder '{parent_name}' could not be located or created.",
+                        }
 
         clean_folder_name = folder_name.strip().strip("'\" ")
         new_folder_path = target_parent / clean_folder_name
@@ -400,24 +408,32 @@ class FileManager:
         resolved_parent_msg = f"D: drive ({DEFAULT_WORKSPACE})" if str(DEFAULT_WORKSPACE).startswith("D:") else "default workspace"
 
         if parent_name:
-            clean_parent = re.sub(r"\s+(folder|directory|dir)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ")
-            resolved = self.resolve_target(clean_parent, is_dir=True)
-            if resolved and resolved.is_dir():
-                target_parent = resolved
-                resolved_parent_msg = f"'{resolved.name}' at {resolved}"
+            clean_parent = re.sub(r"\s+(folder|directory|dir|drive)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ")
+            lower_clean = clean_parent.lower().rstrip(":")
+            if lower_clean in ("d", "d drive") or clean_parent.lower() in ("d:", "d: drive"):
+                target_parent = DEFAULT_WORKSPACE
+                resolved_parent_msg = f"D: drive ({DEFAULT_WORKSPACE})"
+            elif os.path.isabs(clean_parent) and Path(clean_parent).is_dir():
+                target_parent = Path(clean_parent).resolve()
+                resolved_parent_msg = f"'{target_parent.name}' at {target_parent}"
             else:
-                # If parent folder does not exist, auto-create it in DEFAULT_WORKSPACE
-                try:
-                    auto_parent = DEFAULT_WORKSPACE / clean_parent
-                    auto_parent.mkdir(parents=True, exist_ok=True)
-                    self.indexer.record_item(auto_parent)
-                    target_parent = auto_parent
-                    resolved_parent_msg = f"'{auto_parent.name}' at {auto_parent}"
-                except Exception:
-                    return {
-                        "success": False,
-                        "error": f"Parent folder '{parent_name}' could not be located.",
-                    }
+                resolved = self.resolve_target(clean_parent, is_dir=True)
+                if resolved and resolved.is_dir():
+                    target_parent = resolved
+                    resolved_parent_msg = f"'{resolved.name}' at {resolved}"
+                else:
+                    # If parent folder does not exist, auto-create it in DEFAULT_WORKSPACE
+                    try:
+                        auto_parent = DEFAULT_WORKSPACE / clean_parent
+                        auto_parent.mkdir(parents=True, exist_ok=True)
+                        self.indexer.record_item(auto_parent)
+                        target_parent = auto_parent
+                        resolved_parent_msg = f"'{auto_parent.name}' at {auto_parent}"
+                    except Exception:
+                        return {
+                            "success": False,
+                            "error": f"Parent folder '{parent_name}' could not be located.",
+                        }
 
         clean_file_name = file_name.strip().strip("'\" ")
         new_file_path = target_parent / clean_file_name

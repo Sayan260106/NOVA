@@ -1,6 +1,6 @@
-# Project Nova - JARVIS-Class Virtual Assistant
+# Project Nova — JARVIS-Class Virtual Assistant
 
-Nova is an intelligent, modular, agentic virtual assistant built for Windows OS automation, system control, file intelligence, and application management.
+Nova is an intelligent, modular, agentic virtual assistant built for Windows OS automation, system control, file intelligence, application management, multi-step command execution, and privacy-first local summarization.
 
 ---
 
@@ -50,6 +50,142 @@ Nova is an intelligent, modular, agentic virtual assistant built for Windows OS 
 - Multi-drive search across all logical drives (`C:\`, `D:\`, etc.) present in File Explorer.
 - Sub-second search across applications, files, and folders with relevance ranking.
 
+### e) Complex & Compound Multi-Step Commands (Goal a)
+- Understands and executes multi-step commands joined by natural conjunctions (`and`, `then`, `and then`, `after that`, `;`).
+- Automatically maintains execution context across steps (e.g., creating a folder and immediately placing a file inside that newly created folder without needing redundant paths).
+- Hybrid execution: Powered by local Ollama LLM intent decomposition when available, with a robust deterministic rule-based compound engine as an instant fallback.
+
+### f) Local & Offline Summarization (Goal b — Zero API Keys)
+- Summarizes any arbitrary text, local file/document, or conversational session context completely offline.
+- Powered by local Ollama (`llama3.2` / `mistral` / etc.) running locally at `localhost:11434` without any external cloud APIs, internet connectivity, or API keys required.
+- High-reliability heuristic extractive summarizer fallback that works 100% offline even if Ollama is not installed or running.
+
+---
+
+## 📖 Complete Nova Commands Reference
+
+Nova supports natural conversational phrasing, explicit commands, and multi-step instructions.
+
+### 1. 🚀 Application Management
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `open <app>` | `open chrome` | Launches the application using fuzzy matching & aliases |
+| `launch <app>` | `launch calculator` | Synonym for launching applications |
+| `start <app>` | `start notepad` | Synonym for launching applications |
+| `run <app>` | `run terminal` | Synonym for launching applications |
+| `open app <name>` | `open app spotify` | Explicitly targets installed applications |
+
+*Supported Aliases:* `calc` -> Calculator, `chrome` -> Google Chrome, `notes` -> Notepad, `terminal` -> Windows Terminal, `code` -> Visual Studio Code, `edge` -> Microsoft Edge, `files` / `explorer` -> File Explorer, and more.
+
+---
+
+### 2. 📁 Zero-Path File & Folder Intelligence
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `create folder <name>` | `create folder Projects` | Creates folder in **D: drive** (`D:\`) by default |
+| `create folder <name> inside <parent>` | `create folder Notes inside Projects` | Locates `<parent>` anywhere on PC and creates folder inside |
+| `make a folder '<name>' in <parent>` | `make a folder 'Demo' in Project folder` | Natural phrasing for nested folder creation |
+| `create file <name>` | `create file todo.txt` | Creates an empty file in **D: drive** root |
+| `create file <name> with content '<text>'` | `create file notes.txt with content 'Call client'` | Creates file with initial text content |
+| `create file <name> [with content '...'] inside <parent>` | `create file brief.txt with content 'Nova' inside Vault` | Creates file with content inside the resolved parent directory |
+| `rename file <old> to <new>` | `rename file draft.txt to final.txt` | Discovers `<old>` anywhere on PC and renames it in place |
+| `rename folder <old> to <new>` | `rename folder DeepArchive to Classified` | Discovers `<old>` folder and renames it in place |
+| `copy file <src> to <dest>` | `copy file report.pdf to Backup` | Auto-resolves source file and destination folder |
+| `move file <src> to <dest>` | `move file data.csv to Archive` | Auto-resolves source file and destination folder |
+| `delete file <name>` | `delete file temp.log` | Safely moves file to **Windows Recycle Bin** (`send2trash`) |
+| `delete folder <name>` | `delete folder TempDir` | Safely moves folder to **Windows Recycle Bin** |
+| `delete file/folder <name> permanently` | `delete file secret.key permanently` | Permanently deletes item from disk |
+
+#### 🛡️ Duplicate Disambiguation & Deletion Confirmation
+If duplicate files or folders exist with the same name across your drives:
+1. Nova displays a numbered list of all discovered candidates with their paths and file sizes.
+2. Prompts you to pick the exact candidate: `Which one would you like to delete? [1-N] (or 'c' to cancel)`.
+3. Displays a final confirmation prompt (`[y/N]`) showing the exact path before performing deletion.
+
+---
+
+### 3. 📂 Universal Open (Apps, Files & Folders)
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `open <name>` | `open Project` | Discovers matching applications, files, and folders across system |
+| `open file <name>` | `open file budget.xlsx` | Specifically searches for and opens files in default editor |
+| `open folder <name>` | `open folder Documents` | Specifically searches for and opens folders in Windows File Explorer |
+
+#### 🔀 Open Disambiguation & Confirmation
+When multiple items share the same name (e.g. an application, a file, and a folder):
+1. Nova categorizes candidates (`📁 Folder`, `📄 File`, `🖥️ App`) with full paths and sizes.
+2. Prompts you to select which target you want to open: `Which one would you like to open? [1-N]`.
+3. Prompts for confirmation (`[Y/n]`) before opening.
+
+---
+
+### 4. 🔎 Universal Search & Discovery across File Explorer
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `find app <name>` | `find app spotify` | Searches cataloged installed applications |
+| `find file <name>` | `find file run_nova.py` | Searches indexed files across all logical drives (`C:\`, `D:\`) |
+| `find folder <name>` | `find folder Documents` | Searches indexed directories across all drives |
+| `find <query>` | `find invoice` | Universal search across applications, files, and folders |
+| `search for <query>` | `search for report.pdf` | Synonym for universal search |
+| `locate <query>` | `locate python` | Synonym for universal search |
+
+---
+
+### 5. 🧠 Complex & Compound Multi-Step Commands
+Connect multiple actions into a single instruction using `and`, `then`, `and then`, `after that`, or `;`:
+
+| Example Instruction | Execution Flow |
+| :--- | :--- |
+| `Make a folder 'Demo' in Project folder and create a file 'xyz.txt'` | 1. Creates `Demo` inside `Project`<br>2. Automatically places `xyz.txt` inside `Demo` |
+| `Create folder TestSuite in D: drive and create file results.txt with content 'Passed' inside TestSuite` | 1. Creates `TestSuite` in `D:\`<br>2. Creates `results.txt` with content inside `TestSuite` |
+| `create folder Vault then create file keys.txt inside Vault` | Chains creation in sequence |
+| `open notepad; open calculator` | Executes multiple application launches sequentially |
+
+---
+
+### 6. 📝 Summarization (100% Local & Offline — Zero API Keys)
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `summarize this text: <text>` | `summarize this text: Quantum computing uses qubits in superposition...` | Summarizes arbitrary text directly |
+| `summarize: <text>` | `summarize: Photosynthesis converts light energy into chemical energy.` | Short syntax for text summarization |
+| `summarize file <filename>` | `summarize file results.txt` | Locates file on disk, reads text, and produces concise summary |
+| `summarize document <file> in <folder>` | `summarize document report.pdf inside Vault` | Summarizes specific file inside specified folder |
+| `summarize context` | `summarize context` | Summarizes recent conversation and executed actions |
+| `summarize conversation` | `summarize conversation` | Synonym for session context summarization |
+| `summarize history` | `summarize history` | Synonym for session context summarization |
+
+---
+
+### 7. ⚡ System Power & Battery Management
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `lock laptop` / `lock screen` | `lock laptop` | Locks the Windows workstation |
+| `sleep laptop` / `put laptop to sleep` | `sleep laptop` | Suspends system to low-power standby |
+| `restart laptop` | `restart laptop` | Restarts the computer immediately |
+| `restart laptop in <seconds> seconds` | `restart laptop in 60 seconds` | Schedules restart with a countdown timer |
+| `shutdown laptop` | `shutdown laptop` | Shuts down the computer immediately |
+| `shutdown laptop in <seconds> seconds` | `shutdown laptop in 90 seconds` | Schedules shutdown with a countdown timer |
+| `cancel shutdown` / `abort restart` | `cancel shutdown` | Aborts any active scheduled shutdown or restart |
+| `battery status` / `power status` | `battery status` | Shows battery %, charging status, and remaining runtime |
+
+> **Safety Notice:** Nova runs in safe dry-run mode by default. Real power actions require passing the `--live-power` flag and interactive confirmation.
+
+---
+
+### 8. 🏛️ System Architecture & Memory
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `show language chart` | `show language chart` | Displays the complete 24-component JARVIS architecture & tech stack chart |
+| `languages` / `tech stack` | `languages` | Displays programming language recommendations for virtual assistants |
+
+---
+
+### 9. 🚪 Session Control
+| Command / Syntax | Description |
+| :--- | :--- |
+| `help` / `commands` / `what can you do` | Displays the complete Nova interactive command manual |
+| `exit` / `quit` / `bye` / `shutdown nova` | Shuts down the Nova virtual assistant session cleanly |
+
 ---
 
 ## 🧠 Memory: Component Architecture & Programming Languages
@@ -84,31 +220,74 @@ Nova is an intelligent, modular, agentic virtual assistant built for Windows OS 
 
 ---
 
-## 🛠️ Usage
+## 🛠️ Installation & Setup
 
-### Run Nova Assistant CLI
+### 1. Prerequisites
+- **Windows 10 / 11**
+- **Python 3.10+** (Python 3.12/3.14 compatible)
+- *(Optional, for local LLM)* **Ollama**:
+  ```bash
+  # Download from https://ollama.com and pull a lightweight model
+  ollama pull llama3.2
+  ```
+
+### 2. Environment Setup
 ```bash
-# In safe power dry-run mode (default)
-.venv\Scripts\python run_nova.py
+# Clone or navigate to the repository
+cd d:\Nova
 
-# With live system power control enabled
+# Create and activate virtual environment
+python -m venv .venv
+.venv\Scripts\activate
+
+# Install required dependencies
+pip install -r requirements.txt
+```
+
+---
+
+## 💻 Running Nova Assistant CLI
+
+### Safe Power Dry-Run Mode (Default)
+Safe mode intercepts all system power operations (lock, sleep, restart, shutdown) and verifies API parameters without altering machine state:
+```bash
+.venv\Scripts\python run_nova.py
+```
+
+### Live System Execution Mode
+Enables real execution of workstation lock, suspend/sleep, and restart/shutdown timers (with interactive confirmation):
+```bash
 .venv\Scripts\python run_nova.py --live-power
 ```
 
-### Run Tests & Verification
+---
+
+## 🧪 Test Suites & Verification
+
+Nova features a complete automated testing suite covering all checkpoints:
+
 ```bash
-# App Manager tests
-.venv\Scripts\python tests/test_app_manager.py
-
-# Zero-path File Manager tests (D: drive, specific folder, rename, search)
-.venv\Scripts\python tests/test_file_manager.py
-
-# Power Manager tests
-.venv\Scripts\python tests/test_power_manager.py
-
-# Brain end-to-end integration tests
-.venv\Scripts\python tests/test_brain.py
-
-# Complete 26-point comprehensive test suite
+# 1. Comprehensive Verification Suite (All 41 Checkpoints)
 .venv\Scripts\python tests/run_verification.py
+
+# 2. Complex Multi-Step Commands & Summarization Suite (Goal a & Goal b)
+.venv\Scripts\python -m unittest tests/test_complex_brain.py
+
+# 3. Duplicate Name Disambiguation & Interactive Deletion Suite
+.venv\Scripts\python -m unittest tests/test_deletion_disambiguation.py
+
+# 4. Multi-Candidate Open Disambiguation Suite
+.venv\Scripts\python -m unittest tests/test_open_disambiguation.py
+
+# 5. Zero-Path File Manager & D: Drive Intelligence Suite
+.venv\Scripts\python -m unittest tests/test_file_manager.py
+
+# 6. Installed Application Discovery & Launching Suite
+.venv\Scripts\python -m unittest tests/test_app_manager.py
+
+# 7. System Power & Battery Management Suite
+.venv\Scripts\python -m unittest tests/test_power_manager.py
+
+# 8. Brain End-to-End Intent & Integration Suite
+.venv\Scripts\python -m unittest tests/test_brain.py
 ```
