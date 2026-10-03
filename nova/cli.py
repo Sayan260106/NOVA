@@ -61,6 +61,7 @@ def run_cli(dry_run_power: bool = True):
     print(f"\n[Nova Online]")
     print(f" • Installed Applications Cataloged: {app_count}")
     print(f" • Power / Battery Status: {batt_str}")
+    print(f" • Local Brain Intelligence (Ollama): {'Active (' + brain.ollama.model_name + ')' if brain.ollama.is_available() else 'Offline (Rule Engine Active)'}")
     print(f" • Power Operations Mode: {'DRY RUN (Safe)' if dry_run_power else 'ACTIVE SYSTEM EXECUTION'}")
     print(f" • Type 'help' for examples or 'exit' to quit.\n")
 
@@ -209,6 +210,10 @@ def run_cli(dry_run_power: bool = True):
                 print(f"\nNova:\n{result['response']}\n")
             elif intent == NovaIntent.HELP:
                 print(f"\n{result['response']}\n")
+            elif intent == NovaIntent.SUMMARIZE:
+                print(f"\nNova: {result['response']}\n")
+            elif intent == NovaIntent.COMPLEX_COMMAND:
+                print(f"\nNova: Executed multi-step command:\n{result['response']}\n")
             else:
                 resp = result.get("response", "Done.")
                 prefix = "Nova: "

@@ -25,7 +25,7 @@ def run_verification():
     # Pre-test cleanup of test artifacts from previous runs
     import shutil
     from nova.config import DEFAULT_WORKSPACE
-    for test_dir in ["JarvisVault", "SecondaryVault", "DualTarget", "ConflictDirA", "ConflictDirB"]:
+    for test_dir in ["JarvisVault", "SecondaryVault", "DualTarget", "ConflictDirA", "ConflictDirB", "Project", "TestSuite", "SummaryVault"]:
         p = DEFAULT_WORKSPACE / test_dir
         if p.exists():
             shutil.rmtree(p, ignore_errors=True)
@@ -103,6 +103,19 @@ def run_verification():
         ("Memory Check: JARVIS Component Language Architecture Chart", [
             ("show language chart", NovaIntent.LANGUAGE_CHART),
         ]),
+
+        # Checkpoint G: Complex & Compound Command Execution (Multi-Step Intent Understanding)
+        ("Checkpoint G: Complex & Compound Command Execution (Goal a)", [
+            ("Make a folder 'Demo' in Project folder and create a file 'xyz.txt'", NovaIntent.COMPLEX_COMMAND),
+            ("create folder TestSuite in D: drive and create file results.txt with content 'Project Nova verification complete' inside TestSuite", NovaIntent.COMPLEX_COMMAND),
+        ]),
+
+        # Checkpoint H: Summarization (Text, File, Context - Zero API Keys, Local Ollama / Offline)
+        ("Checkpoint H: Summarization Capabilities (Goal b - Local / Offline)", [
+            ("summarize this text: Quantum computing uses qubits in superposition to calculate exponentially faster than classical computers.", NovaIntent.SUMMARIZE),
+            ("summarize file results.txt", NovaIntent.SUMMARIZE),
+            ("summarize context", NovaIntent.SUMMARIZE),
+        ]),
     ]
 
     all_passed = True
@@ -167,12 +180,28 @@ def run_verification():
         print(f"[FAIL] Deletion Disambiguation: Expected 2 candidates, got {del_prep}")
         all_passed = False
 
+    # Explicit Validation for Goal a (Complex Compound Multi-Step Execution)
+    total_commands += 1
+    demo_file = DEFAULT_WORKSPACE / "Project" / "Demo" / "xyz.txt"
+    suite_file = DEFAULT_WORKSPACE / "TestSuite" / "results.txt"
+    if demo_file.exists() and suite_file.exists():
+        print(f"[PASS] Goal a Multi-Step Verification: '{demo_file}' and '{suite_file}' confirmed created on disk.")
+        passed_commands += 1
+    else:
+        print(f"[FAIL] Goal a Multi-Step Verification: Expected files not found on disk. demo={demo_file.exists()}, suite={suite_file.exists()}")
+        all_passed = False
+
     # Cleanup temporary test items
     brain.process("delete file DualTarget.txt permanently")
     brain.process("delete folder DualTarget permanently")
     brain.process("delete file clash_item.txt permanently")
     brain.process("delete folder ConflictDirA permanently")
     brain.process("delete folder ConflictDirB permanently")
+    for test_dir in ["Project", "TestSuite", "SummaryVault"]:
+        p = DEFAULT_WORKSPACE / test_dir
+        if p.exists():
+            shutil.rmtree(p, ignore_errors=True)
+            brain.indexer.remove_item(p)
 
     # Cleanup any test notepad / calculator windows
     import psutil

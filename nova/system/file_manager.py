@@ -348,17 +348,27 @@ class FileManager:
         resolved_parent_msg = f"D: drive ({DEFAULT_WORKSPACE})" if str(DEFAULT_WORKSPACE).startswith("D:") else "default workspace"
 
         if parent_name:
-            resolved = self.resolve_target(parent_name, is_dir=True)
+            clean_parent = re.sub(r"\s+(folder|directory|dir)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ")
+            resolved = self.resolve_target(clean_parent, is_dir=True)
             if resolved and resolved.is_dir():
                 target_parent = resolved
                 resolved_parent_msg = f"'{resolved.name}' at {resolved}"
             else:
-                return {
-                    "success": False,
-                    "error": f"Parent folder '{parent_name}' could not be located.",
-                }
+                # If parent folder does not exist, auto-create it in DEFAULT_WORKSPACE
+                try:
+                    auto_parent = DEFAULT_WORKSPACE / clean_parent
+                    auto_parent.mkdir(parents=True, exist_ok=True)
+                    self.indexer.record_item(auto_parent)
+                    target_parent = auto_parent
+                    resolved_parent_msg = f"'{auto_parent.name}' at {auto_parent}"
+                except Exception:
+                    return {
+                        "success": False,
+                        "error": f"Parent folder '{parent_name}' could not be located or created.",
+                    }
 
-        new_folder_path = target_parent / folder_name.strip()
+        clean_folder_name = folder_name.strip().strip("'\" ")
+        new_folder_path = target_parent / clean_folder_name
         try:
             new_folder_path.mkdir(parents=True, exist_ok=True)
             self.indexer.record_item(new_folder_path)
@@ -390,17 +400,27 @@ class FileManager:
         resolved_parent_msg = f"D: drive ({DEFAULT_WORKSPACE})" if str(DEFAULT_WORKSPACE).startswith("D:") else "default workspace"
 
         if parent_name:
-            resolved = self.resolve_target(parent_name, is_dir=True)
+            clean_parent = re.sub(r"\s+(folder|directory|dir)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ")
+            resolved = self.resolve_target(clean_parent, is_dir=True)
             if resolved and resolved.is_dir():
                 target_parent = resolved
                 resolved_parent_msg = f"'{resolved.name}' at {resolved}"
             else:
-                return {
-                    "success": False,
-                    "error": f"Parent folder '{parent_name}' could not be located.",
-                }
+                # If parent folder does not exist, auto-create it in DEFAULT_WORKSPACE
+                try:
+                    auto_parent = DEFAULT_WORKSPACE / clean_parent
+                    auto_parent.mkdir(parents=True, exist_ok=True)
+                    self.indexer.record_item(auto_parent)
+                    target_parent = auto_parent
+                    resolved_parent_msg = f"'{auto_parent.name}' at {auto_parent}"
+                except Exception:
+                    return {
+                        "success": False,
+                        "error": f"Parent folder '{parent_name}' could not be located.",
+                    }
 
-        new_file_path = target_parent / file_name.strip()
+        clean_file_name = file_name.strip().strip("'\" ")
+        new_file_path = target_parent / clean_file_name
         try:
             new_file_path.write_text(content, encoding="utf-8")
             self.indexer.record_item(new_file_path)
@@ -416,6 +436,43 @@ class FileManager:
             return {
                 "success": False,
                 "error": f"Failed to create file '{file_name}': {str(e)}",
+            }
+
+    def read_file(
+        self,
+        file_name: str,
+        parent_name: Optional[str] = None,
+        max_chars: int = 15000,
+    ) -> Dict[str, Any]:
+        """
+        Reads content from a file located by name without requiring full path.
+        """
+        clean_name = file_name.strip().strip("'\" ")
+        clean_parent = re.sub(r"\s+(folder|directory|dir)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ") if parent_name else None
+        target_path = self.resolve_target(clean_name, is_dir=False, parent_name=clean_parent)
+        if not target_path or not target_path.exists() or target_path.is_dir():
+            return {
+                "success": False,
+                "error": f"File '{clean_name}' could not be located to read.",
+            }
+
+        try:
+            content = target_path.read_text(encoding="utf-8", errors="replace")
+            is_truncated = len(content) > max_chars
+            if is_truncated:
+                content = content[:max_chars]
+            return {
+                "success": True,
+                "file_name": target_path.name,
+                "path": str(target_path.resolve()),
+                "content": content,
+                "size": target_path.stat().st_size,
+                "truncated": is_truncated,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to read file '{target_path.name}': {str(e)}",
             }
 
     def rename_item(
