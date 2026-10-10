@@ -100,6 +100,14 @@ class NovaPolicy:
         NovaIntent.BATTERY_STATUS,
         NovaIntent.LANGUAGE_CHART,
         NovaIntent.HELP,
+        NovaIntent.ORGANIZE_FOLDER,
+        NovaIntent.FIND_DUPLICATES,
+        NovaIntent.OPEN_PROJECT,
+        NovaIntent.REMEMBER,
+        NovaIntent.RECALL,
+        NovaIntent.FORGET,
+        NovaIntent.ACTION_HISTORY,
+        NovaIntent.UNDO,
         NovaIntent.COMPLEX_COMMAND,
     }
 
@@ -291,5 +299,13 @@ class NovaPolicy:
                     reason=f"Live system {action_name} will terminate running sessions.",
                 )
             return PolicyDecision.permit("Dry-run power command permitted.")
+
+        # 7. Folder Organization Safety
+        elif intent == NovaIntent.ORGANIZE_FOLDER:
+            folder = step.parameters.get("folder", "")
+            is_prot, reason = self.is_protected_path(folder)
+            if is_prot:
+                return PolicyDecision.block(f"Cannot organize protected path: {reason}")
+            return PolicyDecision.permit()
 
         return PolicyDecision.permit()

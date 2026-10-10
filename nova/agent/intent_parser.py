@@ -6,6 +6,7 @@ compound / complex multi-step commands.
 """
 
 import re
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 
@@ -29,6 +30,14 @@ class NovaIntent:
     BATTERY_STATUS = "BATTERY_STATUS"
     LANGUAGE_CHART = "LANGUAGE_CHART"
     HELP = "HELP"
+    ORGANIZE_FOLDER = "ORGANIZE_FOLDER"
+    FIND_DUPLICATES = "FIND_DUPLICATES"
+    OPEN_PROJECT = "OPEN_PROJECT"
+    REMEMBER = "REMEMBER"
+    RECALL = "RECALL"
+    FORGET = "FORGET"
+    ACTION_HISTORY = "ACTION_HISTORY"
+    UNDO = "UNDO"
     COMPLEX_COMMAND = "COMPLEX_COMMAND"
     UNKNOWN = "UNKNOWN"
 
@@ -58,11 +67,12 @@ class IntentParser:
         if len(explicit_split) > 1:
             return [p.strip() for p in explicit_split if p.strip()]
 
-        # Split on ' and ' if both sides look like commands (contain action verbs)
-        action_verbs = r"(?:create|make|new|write|open|launch|start|run|delete|remove|rename|copy|move|find|search|summarize|lock|sleep|restart|shutdown)"
-        and_parts = re.split(r"\s+and\s+", cleaned, flags=re.IGNORECASE)
+        # Action verbs
+        action_verbs = r"(?:create|make|new|write|open|launch|start|run|delete|remove|rename|copy|move|find|search|locate|list|summarize|lock|sleep|restart|shutdown|organize|detect|preview)"
+
+        # Split on ', and ' or ' and ' if parts look like commands (contain action verbs)
+        and_parts = re.split(r",?\s+and\s+", cleaned, flags=re.IGNORECASE)
         if len(and_parts) > 1:
-            # Check if all parts start with an action verb (or article + action noun)
             is_all_actions = True
             for part in and_parts:
                 part_clean = part.strip()
@@ -71,6 +81,18 @@ class IntentParser:
                     break
             if is_all_actions:
                 return [p.strip() for p in and_parts if p.strip()]
+
+        # Split on comma clauses if all parts are action commands
+        comma_parts = re.split(r",\s+", cleaned)
+        if len(comma_parts) > 1:
+            is_all_actions = True
+            for part in comma_parts:
+                part_clean = part.strip()
+                if not re.search(rf"^(?:also\s+)?(?:please\s+)?{action_verbs}\b", part_clean, re.IGNORECASE):
+                    is_all_actions = False
+                    break
+            if is_all_actions:
+                return [p.strip() for p in comma_parts if p.strip()]
 
         return [cleaned]
 
@@ -158,9 +180,130 @@ class IntentParser:
             else:
                 return {"intent": NovaIntent.SUMMARIZE, "target_type": "text", "text": target_str}
 
+        # 3b. Undo and Rollback
+        # e.g., "undo", "undo that", "undo the last action", "undo the last file move", "undo last rename"
+        m_undo = re.match(
+            r"^(?:please\s+)?undo(?:\s+(?:the\s+|that\s+)?last\s+([a-zA-Z_\-\. ]+?)|(?:\s+that))?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_undo:
+            raw_filter = m_undo.group(1).strip().lower() if m_undo.group(1) else None
+            filt = None
+            if raw_filter:
+                if "move" in raw_filter:
+                    filt = "MOVE_ITEM"
+                elif "rename" in raw_filter:
+                    filt = "RENAME_ITEM"
+                elif "file" in raw_filter or "create" in raw_filter:
+                    filt = "CREATE_FILE"
+                elif "folder" in raw_filter:
+                    filt = "CREATE_FOLDER"
+                elif "copy" in raw_filter:
+                    filt = "COPY_ITEM"
+            return {"intent": NovaIntent.UNDO, "filter": filt}
+
+        # 3c. Action History & Audit Logs
+        # e.g., "what files did you move today", "what did you do today", "show action history", "audit log"
+        m_history = re.match(
+            r"^(?:what\s+(?:files|actions|things|operations|folders)?\s+did\s+you\s+([a-zA-Z_\-]+)\s+today|what\s+did\s+you\s+do\s+today|show\s+(?:action\s+)?history|action\s+history|audit\s+log|list\s+past\s+actions)\b",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_history:
+            verb = m_history.group(1).lower() if m_history.group(1) else None
+            intent_filter = None
+            if verb:
+                if "move" in verb:
+                    intent_filter = NovaIntent.MOVE_ITEM
+                elif "rename" in verb:
+                    intent_filter = NovaIntent.RENAME_ITEM
+                elif "create" in verb:
+                    intent_filter = NovaIntent.CREATE_FILE
+                elif "delete" in verb:
+                    intent_filter = NovaIntent.DELETE_ITEM
+                elif "copy" in verb:
+                    intent_filter = NovaIntent.COPY_ITEM
+            return {
+                "intent": NovaIntent.ACTION_HISTORY,
+                "today": True,
+                "intent_filter": intent_filter,
+            }
+
+        # 3d. Persistent User Memory - Remember
+        # e.g., "Remember that my NOVA project is in D:\Projects\NOVA"
+        m_remember_proj = re.match(
+            r"^(?:please\s+)?remember\s+(?:that\s+)?(?:my\s+)?(?:project\s+)?['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?\s+(?:project\s+)?(?:is\s+in|is\s+at|location\s+is|path\s+is)\s+['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if not m_remember_proj and "project" in cleaned.lower():
+            m_remember_proj = re.match(
+                r"^(?:please\s+)?remember\s+(?:that\s+)?(?:my\s+)?(?:project\s+)?['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?\s+(?:project\s+)?(?:is)\s+['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?$",
+                cleaned,
+                re.IGNORECASE,
+            )
+        if m_remember_proj:
+            key_name = m_remember_proj.group(1).strip().strip("'\" ")
+            path_val = m_remember_proj.group(2).strip().strip("'\" ")
+            return {
+                "intent": NovaIntent.REMEMBER,
+                "type": "project_location",
+                "key": key_name,
+                "value": path_val,
+            }
+
+        m_remember_gen = re.match(
+            r"^(?:please\s+)?remember\s+(?:that\s+)?['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?\s+(?:is|means|=|as)\s+['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_remember_gen:
+            k = m_remember_gen.group(1).strip().strip("'\" ")
+            if k.lower().startswith("my "):
+                k = k[3:].strip()
+            return {
+                "intent": NovaIntent.REMEMBER,
+                "type": "user_preference",
+                "key": k,
+                "value": m_remember_gen.group(2).strip().strip("'\" "),
+            }
+
+        # 3e. Persistent User Memory - Recall
+        # e.g., "where is my NOVA project?", "what do you remember?", "show memories"
+        m_recall_proj = re.match(
+            r"^(?:where\s+is|recall|what\s+is\s+(?:the\s+)?(?:path|location)\s+(?:of|for))\s+(?:my\s+)?(?:project\s+)?['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?(?:\s+project)?\??$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_recall_proj:
+            return {
+                "intent": NovaIntent.RECALL,
+                "key": m_recall_proj.group(1).strip().strip("'\" "),
+            }
+
+        if re.match(r"^(?:what\s+do\s+you\s+remember|show\s+(?:my\s+)?(?:memories|preferences|memory)|list\s+(?:my\s+)?(?:memories|preferences|memory)|recall\s+all)\b", cleaned, re.IGNORECASE):
+            return {"intent": NovaIntent.RECALL}
+
+        # 3f. Persistent User Memory - Forget
+        # e.g., "forget my old project path", "forget my NOVA project", "clear memories"
+        if cleaned.lower() in ("clear memories", "forget everything", "clear all memory", "wipe memory"):
+            return {"intent": NovaIntent.FORGET, "all": True}
+
+        m_forget = re.match(
+            r"^(?:please\s+)?forget\s+(?:that\s+)?(?:my\s+)?(?:project\s+)?['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?(?:\s+(?:path|project|location|preference))?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_forget:
+            return {
+                "intent": NovaIntent.FORGET,
+                "key": m_forget.group(1).strip().strip("'\" "),
+            }
+
         # 4. Rename Item
         m_rename = re.match(
-            r"^(?:rename|change\s+name\s+of)\s+(?:(file|folder|directory)\s+)?['\"]?([\w\s\.-]+?)['\"]?\s+(?:to|as)\s+['\"]?([\w\s\.-]+?)['\"]?$",
+            r"^(?:rename|change\s+name\s+of)\s+(?:(file|folder|directory)\s+)?['\"]?([\w\s\.:\\/-]+?)['\"]?\s+(?:to|as)\s+['\"]?([\w\s\.:\\/-]+?)['\"]?$",
             cleaned,
             re.IGNORECASE,
         )
@@ -175,48 +318,74 @@ class IntentParser:
             }
 
         # 5. Create Folder
-        # e.g., "create folder Projects inside Desktop", "make a folder 'Demo' in Project folder"
+        # Supports "create folder tests there", "create a tests folder there", "make folder Demo in Project"
+        m_folder_there = re.match(
+            r"^(?:create|make|new)\s+(?:a\s+)?['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?\s+(?:folder|dir|directory)\s+there$",
+            cleaned,
+            re.IGNORECASE,
+        ) or re.match(
+            r"^(?:create|make|new)\s+(?:a\s+)?(?:folder|dir|directory)\s+['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?\s+there$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_folder_there:
+            fname = m_folder_there.group(1).strip().strip("'\" ")
+            return {"intent": NovaIntent.CREATE_FOLDER, "name": fname, "parent": "there"}
+
+        m_folder_b = re.match(
+            r"^(?:create|make|new)\s+(?:a\s+)?['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?\s+(?:folder|dir|directory)(?:\s+(?:inside|in(?:\s+specific\s+folder)?|in(?:\s+folder)?|in(?:\s+directory)?)\s+['\"]?([\w\s\.:\\/-]+?)['\"]?)?$",
+            cleaned,
+            re.IGNORECASE,
+        )
         m_folder = re.match(
             r"^(?:create|make|new)\s+(?:a\s+)?(?:folder|dir|directory)\s+['\"]?([\w\s\.-]+?)['\"]?(?:\s+(?:inside|in(?:\s+specific\s+folder)?|in(?:\s+folder)?|in(?:\s+directory)?)\s+['\"]?([\w\s\.:\\/-]+?)['\"]?)?$",
             cleaned,
             re.IGNORECASE,
         )
-        if m_folder:
-            name = m_folder.group(1).strip().strip("'\"")
-            raw_parent = m_folder.group(2).strip().strip("'\"") if m_folder.group(2) else None
-            # Clean trailing 'folder' or 'directory' from parent if present
-            parent = re.sub(r"\s+(folder|directory|dir)$", "", raw_parent, flags=re.IGNORECASE).strip("'\"") if raw_parent else None
+        if m_folder_b and m_folder_b.group(1).lower() not in ("folder", "dir", "directory", "a"):
+            name = m_folder_b.group(1).strip().strip("'\" ")
+            raw_p = m_folder_b.group(2)
+            raw_parent = raw_p.strip().strip("'\" ") if raw_p else None
+            parent = re.sub(r"\s+(folder|directory|dir)$", "", raw_parent, flags=re.IGNORECASE).strip("'\" ") if raw_parent else None
+            return {"intent": NovaIntent.CREATE_FOLDER, "name": name, "parent": parent}
+        elif m_folder:
+            name = m_folder.group(1).strip().strip("'\" ")
+            raw_p = m_folder.group(2)
+            raw_parent = raw_p.strip().strip("'\" ") if raw_p else None
+            parent = re.sub(r"\s+(folder|directory|dir)$", "", raw_parent, flags=re.IGNORECASE).strip("'\" ") if raw_parent else None
             return {"intent": NovaIntent.CREATE_FOLDER, "name": name, "parent": parent}
 
         # 6. Create File
-        # Order A: with content before in folder
+        # Order A: with content before in folder / there
         m_file1 = re.match(
-            r"^(?:create|make|new|write)\s+(?:a\s+)?file\s+['\"]?([\w\s\.-]+?)['\"]?(?:\s+with\s+content\s+['\"](.*?)['\"])?(?:\s+(?:inside|in(?:\s+specific\s+folder)?|in(?:\s+folder)?|in(?:\s+directory)?)\s+['\"]?([\w\s\.:\\/-]+?)['\"]?)?$",
+            r"^(?:create|make|new|write)\s+(?:a\s+)?file\s+['\"]?([\w\s\.-]+?)['\"]?(?:\s+with\s+content\s+['\"](.*?)['\"])?(?:\s+(?:inside|in(?:\s+specific\s+folder)?|in(?:\s+folder)?|in(?:\s+directory)?)\s+['\"]?([\w\s\.:\\/-]+?)['\"]?|\s+(there))?$",
             cleaned,
             re.IGNORECASE,
         )
-        # Order B: in folder before with content
+        # Order B: in folder / there before with content
         m_file2 = re.match(
-            r"^(?:create|make|new|write)\s+(?:a\s+)?file\s+['\"]?([\w\s\.-]+?)['\"]?(?:\s+(?:inside|in(?:\s+specific\s+folder)?|in(?:\s+folder)?|in(?:\s+directory)?)\s+['\"]?([\w\s\.:\\/-]+?)['\"]?)?(?:\s+with\s+content\s+['\"](.*?)['\"])?$",
+            r"^(?:create|make|new|write)\s+(?:a\s+)?file\s+['\"]?([\w\s\.-]+?)['\"]?(?:\s+(?:inside|in(?:\s+specific\s+folder)?|in(?:\s+folder)?|in(?:\s+directory)?)\s+['\"]?([\w\s\.:\\/-]+?)['\"]?|\s+(there))?(?:\s+with\s+content\s+['\"](.*?)['\"])?$",
             cleaned,
             re.IGNORECASE,
         )
-        if m_file2 and m_file2.group(3):
+        if m_file2 and (m_file2.group(2) or m_file2.group(3) or m_file2.group(4)):
             name = m_file2.group(1).strip().strip("'\"")
-            raw_parent = m_file2.group(2).strip().strip("'\"") if m_file2.group(2) else None
+            raw_p = m_file2.group(2) or m_file2.group(3)
+            raw_parent = raw_p.strip().strip("'\"") if raw_p else None
             parent = re.sub(r"\s+(folder|directory|dir)$", "", raw_parent, flags=re.IGNORECASE).strip("'\"") if raw_parent else None
-            content = m_file2.group(3) or ""
+            content = m_file2.group(4) or ""
             return {"intent": NovaIntent.CREATE_FILE, "name": name, "content": content, "parent": parent}
         elif m_file1:
             name = m_file1.group(1).strip().strip("'\"")
             content = m_file1.group(2) or ""
-            raw_parent = m_file1.group(3).strip().strip("'\"") if m_file1.group(3) else None
+            raw_p = m_file1.group(3) or m_file1.group(4)
+            raw_parent = raw_p.strip().strip("'\"") if raw_p else None
             parent = re.sub(r"\s+(folder|directory|dir)$", "", raw_parent, flags=re.IGNORECASE).strip("'\"") if raw_parent else None
             return {"intent": NovaIntent.CREATE_FILE, "name": name, "content": content, "parent": parent}
 
         # 7. Copy Item
         m_copy = re.match(
-            r"^copy\s+(?:file\s+|folder\s+)?['\"]?([\w\s\.-]+?)['\"]?\s+(?:to|into)\s+['\"]?([\w\s\.-]+?)['\"]?$",
+            r"^copy\s+(?:file\s+|folder\s+)?['\"]?([\w\s\.:\\/-]+?)['\"]?\s+(?:to|into)\s+['\"]?([\w\s\.:\\/-]+?)['\"]?$",
             cleaned,
             re.IGNORECASE,
         )
@@ -229,7 +398,7 @@ class IntentParser:
 
         # 8. Move Item
         m_move = re.match(
-            r"^move\s+(?:file\s+|folder\s+)?['\"]?([\w\s\.-]+?)['\"]?\s+(?:to|into)\s+['\"]?([\w\s\.-]+?)['\"]?$",
+            r"^move\s+(?:file\s+|folder\s+)?['\"]?([\w\s\.:\\/-]+?)['\"]?\s+(?:to|into)\s+['\"]?([\w\s\.:\\/-]+?)['\"]?$",
             cleaned,
             re.IGNORECASE,
         )
@@ -242,7 +411,7 @@ class IntentParser:
 
         # 9. Delete Item
         m_del = re.match(
-            r"^(?:delete|remove|trash|erase)\s+(?:(file|folder|directory)\s+)?['\"]?([\w\s\.-]+?)['\"]?(?:\s+(permanently))?$",
+            r"^(?:delete|remove|trash|erase)\s+(?:(file|folder|directory)\s+)?['\"]?([\w\s\.:\\/-]+?)['\"]?(?:\s+(permanently))?$",
             cleaned,
             re.IGNORECASE,
         )
@@ -258,50 +427,117 @@ class IntentParser:
                 "permanent": permanent,
             }
 
-        # 10. Find / Search
-        m_find = re.match(
-            r"^(?:find|search(?:\s+for)?|locate)\s+(?:(file|folder|directory|app|application)\s+)?['\"]?([\w\s\.-]+?)['\"]?$",
+        # 9a. Organize Folder by File Type
+        m_org = re.match(
+            r"^(?:preview\s+)?organize\s+(?:my\s+)?(?:folder\s+)?['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?(?:\s+folder)?(?:\s+by\s+(?:file\s+)?type)?(?:\s+(preview))?$",
             cleaned,
             re.IGNORECASE,
         )
-        if m_find:
-            kind_str = m_find.group(1) or "any"
-            if kind_str in ("app", "application"):
-                kind = "app"
-            elif kind_str in ("folder", "directory"):
-                kind = "folder"
-            elif kind_str == "file":
-                kind = "file"
-            else:
-                kind = "any"
-            return {"intent": NovaIntent.FIND_ITEM, "query": m_find.group(2).strip().strip("'\""), "kind": kind}
+        if m_org:
+            target_f = m_org.group(1).strip().strip("'\" ")
+            is_preview = bool(cleaned.lower().startswith("preview") or m_org.group(2))
+            return {
+                "intent": NovaIntent.ORGANIZE_FOLDER,
+                "folder": target_f,
+                "preview": is_preview,
+            }
 
-        # 11. Open Application
+        # 9b. Find Duplicate Files
+        m_dup = re.match(
+            r"^(?:find|detect|search(?:\s+for)?|list)\s+duplicates?(?:\s+files?)?(?:\s+(?:in|inside|under)\s+(?:my\s+)?(?:folder\s+)?['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?(?:\s+folder)?)?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_dup:
+            target_f = m_dup.group(1).strip().strip("'\" ") if m_dup.group(1) else None
+            return {
+                "intent": NovaIntent.FIND_DUPLICATES,
+                "folder": target_f,
+            }
+
+        # 10. Find / Search (Basic & Advanced Natural Language Filters)
+        if re.match(r"^(?:find|search(?:\s+for)?|locate|list\s+files?)\b", cleaned, re.IGNORECASE):
+            parsed_find = self._parse_find_command(cleaned)
+            if parsed_find:
+                return parsed_find
+
+        # 11. Open Project or File in specific Application
+        # Examples: "open my NOVA project in VS Code", "open project Nova in code", "open report.pdf with chrome"
+        m_open_in_app = re.match(
+            r"^(?:open|launch|start)\s+(?:my\s+)?(?:project\s+|file\s+|folder\s+)?['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?\s+(?:project\s+)?(?:in|with|using)\s+['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_open_in_app:
+            target = m_open_in_app.group(1).strip().strip("'\" ")
+            app = m_open_in_app.group(2).strip().strip("'\" ")
+            # If target has a file extension (and not .exe), it's OPEN_ITEM with app
+            if "." in target and not target.lower().endswith((".exe", ".cmd", ".bat")):
+                return {"intent": NovaIntent.OPEN_ITEM, "name": target, "app": app}
+            # If "project" was in cleaned or app is an editor/IDE, it's OPEN_PROJECT
+            lower_clean = cleaned.lower()
+            if "project" in lower_clean or app.lower() in ("code", "vscode", "vs code", "visual studio code", "pycharm", "sublime", "sublime text", "cursor", "notepad++", "studio"):
+                return {"intent": NovaIntent.OPEN_PROJECT, "project": target, "app": app}
+            return {"intent": NovaIntent.OPEN_ITEM, "name": target, "app": app}
+
+        # 12. Open Application in Project: e.g. "open VS Code in my NOVA project", "launch code in D:\Nova"
+        m_app_in_proj = re.match(
+            r"^(?:open|launch|start)\s+(?:app\s+)?['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?\s+(?:in|inside|for)\s+(?:my\s+)?(?:project\s+|folder\s+)?['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_app_in_proj:
+            app = m_app_in_proj.group(1).strip().strip("'\" ")
+            proj = m_app_in_proj.group(2).strip().strip("'\" ")
+            if "project" in cleaned.lower() or app.lower() in ("code", "vscode", "vs code", "visual studio code", "pycharm", "sublime", "sublime text", "notepad", "terminal"):
+                return {"intent": NovaIntent.OPEN_PROJECT, "project": proj, "app": app}
+
+        # 13. Open Project directly: e.g. "open project Nova", "open my NOVA project"
+        m_open_project = re.match(
+            r"^(?:open|launch)\s+(?:(?:my\s+)?project\s+['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?|(?:my\s+)?['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?\s+project)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_open_project:
+            proj_name = (m_open_project.group(1) or m_open_project.group(2)).strip().strip("'\" ")
+            return {
+                "intent": NovaIntent.OPEN_PROJECT,
+                "project": proj_name,
+                "app": "Visual Studio Code",
+            }
+
+        # 14. Open Application explicitly: e.g. "open app spotify"
         m_open_app = re.match(
-            r"^(?:open|launch|start|run)\s+(?:app|application)\s+['\"]?([\w\s\.-]+?)['\"]?$",
+            r"^(?:open|launch|start|run)\s+(?:app|application)\s+['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?$",
             cleaned,
             re.IGNORECASE,
         )
         if m_open_app:
-            return {"intent": NovaIntent.OPEN_APP, "name": m_open_app.group(1).strip().strip("'\"")}
+            return {"intent": NovaIntent.OPEN_APP, "name": m_open_app.group(1).strip().strip("'\" ")}
 
-        # 12. Open File or Folder
+        # 15. Open File or Folder explicitly: e.g. "open file budget.xlsx", "open folder Documents"
         m_open_file_folder = re.match(
-            r"^(?:open)\s+(file|folder|directory)\s+['\"]?([\w\s\.-]+?)['\"]?$",
+            r"^(?:open)\s+(file|folder|directory)\s+['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?(?:\s+(?:in|with|using)\s+['\"]?([a-zA-Z0-9_\-\. ]+?)['\"]?)?$",
             cleaned,
             re.IGNORECASE,
         )
         if m_open_file_folder:
-            return {
+            res_dict = {
                 "intent": NovaIntent.OPEN_ITEM,
-                "name": m_open_file_folder.group(2).strip().strip("'\""),
+                "name": m_open_file_folder.group(2).strip().strip("'\" "),
                 "kind": m_open_file_folder.group(1),
             }
+            if m_open_file_folder.group(3):
+                res_dict["app"] = m_open_file_folder.group(3).strip().strip("'\" ")
+            return res_dict
 
-        # 13. Generic "Open <something>"
-        m_open_generic = re.match(r"^(?:open|launch|start)\s+['\"]?([\w\s\.-]+?)['\"]?$", cleaned, re.IGNORECASE)
+        # 16. Generic "Open <something>"
+        m_open_generic = re.match(r"^(?:open|launch|start)\s+['\"]?([a-zA-Z0-9_\-\.\:\\/ ]+?)['\"]?$", cleaned, re.IGNORECASE)
         if m_open_generic:
-            target = m_open_generic.group(1).strip().strip("'\"")
+            target = m_open_generic.group(1).strip().strip("'\" ")
+            # Strip leading "the " e.g. "open the Q3 financial report"
+            if target.lower().startswith("the "):
+                target = target[4:].strip()
             if "." in target and not target.endswith(".exe"):
                 return {"intent": NovaIntent.OPEN_ITEM, "name": target}
             return {"intent": NovaIntent.OPEN_APP, "name": target}
@@ -311,3 +547,134 @@ class IntentParser:
             return {"intent": NovaIntent.HELP}
 
         return {"intent": NovaIntent.UNKNOWN, "raw": raw_text}
+
+    def _parse_find_command(self, text: str) -> Optional[Dict[str, Any]]:
+        """Parses natural language search commands into structured search filters."""
+        from nova.core.indexer import EXTENSION_CATEGORY_MAP, parse_size_str
+
+        core = re.sub(r"^(?:find|search(?:\s+for)?|locate|list\s+files?)\s+", "", text, flags=re.IGNORECASE).strip()
+        core = re.sub(r"^(?:all\s+)", "", core, flags=re.IGNORECASE).strip()
+
+        # Check for simple app search: e.g. "find app chrome", "app notepad"
+        m_app = re.match(r"^(?:app|application)\s+['\"]?([\w\s\.-]+?)['\"]?$", core, re.IGNORECASE)
+        if m_app:
+            return {"intent": NovaIntent.FIND_ITEM, "query": m_app.group(1).strip().strip("'\""), "kind": "app"}
+
+        # Check for simple file or folder search: e.g. "find file run_nova.py", "find folder Documents"
+        m_simple = re.match(r"^(file|folder|directory)\s+['\"]?([\w\s\.-]+?)['\"]?$", core, re.IGNORECASE)
+        if m_simple:
+            kind_str = m_simple.group(1).lower()
+            kind_val = "folder" if kind_str in ("folder", "directory") else "file"
+            target_name = m_simple.group(2).strip().strip("'\"")
+            return {
+                "intent": NovaIntent.FIND_ITEM,
+                "query": target_name,
+                "kind": kind_val,
+                "extension": Path(target_name).suffix.lower() if "." in target_name else None,
+                "directory": None,
+                "modified_within_days": None,
+                "min_size": None,
+                "max_size": None,
+            }
+
+        # Check for single word filename query: e.g. "find run_nova.py"
+        if len(core.strip().split()) == 1 and "." in core.strip() and not core.strip().startswith("."):
+            clean_token = core.strip().strip("'\" ")
+            return {
+                "intent": NovaIntent.FIND_ITEM,
+                "query": clean_token,
+                "kind": "file",
+                "extension": Path(clean_token).suffix.lower(),
+                "directory": None,
+                "modified_within_days": None,
+                "min_size": None,
+                "max_size": None,
+            }
+
+        # Extract modification date filter
+        modified_within_days: Optional[float] = None
+        m_mod = re.search(
+            r"\b(?:modified|updated|changed)\s+(?:in\s+the\s+last|past|within)?\s*(\d+)?\s*(days?|hours?|weeks?|today|yesterday)\b",
+            core,
+            re.IGNORECASE,
+        )
+        if m_mod:
+            num_str = m_mod.group(1)
+            unit_str = m_mod.group(2).lower()
+            if unit_str.startswith("today"):
+                modified_within_days = 1.0
+            elif unit_str.startswith("yesterday"):
+                modified_within_days = 2.0
+            elif num_str:
+                num = float(num_str)
+                if unit_str.startswith("hour"):
+                    modified_within_days = max(num / 24.0, 0.04)
+                elif unit_str.startswith("week"):
+                    modified_within_days = num * 7.0
+                else:
+                    modified_within_days = num
+            core = core[:m_mod.start()] + " " + core[m_mod.end():]
+
+        # Extract size filter
+        min_size: Optional[int] = None
+        max_size: Optional[int] = None
+        m_size_gt = re.search(r"\b(?:larger|bigger|greater)\s+than\s+([0-9\.]+\s*[a-zA-Z]+)\b", core, re.IGNORECASE)
+        if m_size_gt:
+            min_size = parse_size_str(m_size_gt.group(1))
+            core = core[:m_size_gt.start()] + " " + core[m_size_gt.end():]
+        m_size_lt = re.search(r"\b(?:smaller|less)\s+than\s+([0-9\.]+\s*[a-zA-Z]+)\b", core, re.IGNORECASE)
+        if m_size_lt:
+            max_size = parse_size_str(m_size_lt.group(1))
+            core = core[:m_size_lt.start()] + " " + core[m_size_lt.end():]
+
+        # Extract directory filter
+        directory: Optional[str] = None
+        m_dir = re.search(
+            r"\b(?:in|inside|under)\s+(?:my\s+)?(?:project\s+)?['\"]?([a-zA-Z]:?[\\/\w\.-]*?)['\"]?(?:\s+(?:project|folder|directory|dir|drive))?(?:\s|$)",
+            core,
+            re.IGNORECASE,
+        )
+        if m_dir:
+            cand_dir = m_dir.group(1).strip()
+            if cand_dir.lower() not in ("python", "pdf", "java", "code", "image", "video", "text"):
+                directory = cand_dir
+                core = core[:m_dir.start()] + " " + core[m_dir.end():]
+
+        # Extract extension or file category
+        extension: Optional[str] = None
+        for cat in EXTENSION_CATEGORY_MAP.keys():
+            m_cat = re.search(rf"\b{cat}(?:\s+files?|\s+documents?|\s+scripts?)?\b", core, re.IGNORECASE)
+            if m_cat:
+                extension = cat
+                core = core[:m_cat.start()] + " " + core[m_cat.end():]
+                break
+
+        if not extension:
+            m_ext = re.search(r"\b\*?\.([a-zA-Z0-9]+)\b", core)
+            if m_ext:
+                extension = f".{m_ext.group(1).lower()}"
+                core = core[:m_ext.start()] + " " + core[m_ext.end():]
+
+        # Extract kind
+        kind = "any"
+        if re.search(r"\b(?:folders?|directory|directories)\b", core, re.IGNORECASE):
+            kind = "folder"
+            core = re.sub(r"\b(?:folders?|directory|directories)\b", "", core, flags=re.IGNORECASE)
+        elif re.search(r"\b(?:files?|documents?)\b", core, re.IGNORECASE) or extension:
+            kind = "file"
+            core = re.sub(r"\b(?:files?|documents?)\b", "", core, flags=re.IGNORECASE)
+
+        # Remaining core text is the query
+        query = re.sub(r"\s+", " ", core).strip().strip("'\" ")
+        query = re.sub(r"^(?:named|called|with\s+name)\s+", "", query, flags=re.IGNORECASE).strip()
+
+        return {
+            "intent": NovaIntent.FIND_ITEM,
+            "query": query,
+            "kind": kind,
+            "extension": extension,
+            "directory": directory,
+            "modified_within_days": modified_within_days,
+            "min_size": min_size,
+            "max_size": max_size,
+        }

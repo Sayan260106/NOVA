@@ -13,6 +13,8 @@ import threading
 from nova.config import LANGUAGE_CHART, DEFAULT_WORKSPACE
 from nova.core.indexer import Indexer
 from nova.core.llm import OllamaClient
+from nova.core.memory import PersistentMemory
+from nova.core.action_history import ActionHistory
 from nova.system.app_manager import AppManager
 from nova.system.file_manager import FileManager
 from nova.system.power_manager import PowerManager
@@ -83,8 +85,10 @@ class NovaBrain:
 
     def __init__(self, dry_run_power: bool = True):
         self.dry_run_power = dry_run_power
+        self.memory = PersistentMemory()
+        self.action_history = ActionHistory()
         self.indexer = Indexer()
-        self.app_manager = AppManager()
+        self.app_manager = AppManager(memory=self.memory)
         self.file_manager = FileManager(indexer=self.indexer)
         self.power_manager = PowerManager()
         self.intent_parser = IntentParser()
@@ -93,8 +97,8 @@ class NovaBrain:
         self._last_context: Dict[str, Any] = {}
         self._initialized = False
 
-        # Phase 1: Planner, Policy, and Executor architecture
-        self.planner = NovaPlanner(intent_parser=self.intent_parser)
+        # Phase 1, 2, 3: Planner, Policy, Executor with Memory & Action History
+        self.planner = NovaPlanner(intent_parser=self.intent_parser, memory=self.memory)
         self.policy = NovaPolicy(strict_mode=True)
         self.executor = NovaExecutor(
             file_manager=self.file_manager,
@@ -103,6 +107,8 @@ class NovaBrain:
             ollama_client=self.ollama,
             policy=self.policy,
             dry_run_power=self.dry_run_power,
+            memory=self.memory,
+            action_history=self.action_history,
         )
 
     def initialize(self) -> None:
@@ -430,7 +436,26 @@ class NovaBrain:
         Processes a complex, multi-step, or compound command using Planner and Executor.
         Uses Ollama decomposition if available, with robust deterministic compound engine fallback.
         """
-        # Try Ollama decomposition first if available
+        # 1. Deterministic Planner decomposition if sub_commands parse into valid intents
+        split_subs = sub_commands or self.intent_parser.split_compound(utterance)
+        if len(split_subs) > 1:
+            parsed_subs = [self.intent_parser.parse_single(s) for s in split_subs]
+            if all(p.get("intent") not in (NovaIntent.UNKNOWN, None) for p in parsed_subs):
+                parsed = {
+                    "intent": NovaIntent.COMPLEX_COMMAND,
+                    "raw": utterance,
+                    "sub_commands": split_subs,
+                }
+                plan = self.planner.build_plan(utterance, parsed_intent=parsed, context=self._last_context)
+                if plan.is_valid:
+                    exec_ctx = dict(self._last_context)
+                    exec_ctx["history"] = self.history
+                    res = self.executor.execute_plan(plan, context=exec_ctx)
+                    self._last_context.update(exec_ctx)
+                    self._record_history(utterance, res)
+                    return res
+
+        # 2. Try Ollama decomposition for conversational or fuzzy compound commands
         if self.ollama.is_available():
             llm_steps = self.ollama.parse_complex_command(utterance, context=self._last_context)
             if llm_steps and len(llm_steps) > 0:
@@ -455,11 +480,11 @@ class NovaBrain:
                     self._record_history(utterance, res)
                     return res
 
-        # Deterministic Planner & Executor fallback
+        # 3. Deterministic Planner & Executor fallback
         parsed = {
             "intent": NovaIntent.COMPLEX_COMMAND,
             "raw": utterance,
-            "sub_commands": sub_commands or self.intent_parser.split_compound(utterance),
+            "sub_commands": split_subs,
         }
         plan = self.planner.build_plan(utterance, parsed_intent=parsed, context=self._last_context)
         exec_ctx = dict(self._last_context)
@@ -507,6 +532,19 @@ class NovaBrain:
             "   - 'Make a folder Demo in Project folder and create a file xyz.txt'\n"
             "   - 'Create folder TestSuite in D: drive and create file results.txt with content 'Passed' inside TestSuite'\n"
             "   - 'create folder Vault then create file keys.txt inside Vault'\n\n"
+            "[PERSISTENT MEMORY & USER PREFERENCES]\n"
+            " • remember that my NOVA project is in <path>  Store persistent project location\n"
+            " • remember that alias <name> is <app>         Store custom app alias\n"
+            " • remember that <key> is <value>              Store persistent user preference\n"
+            " • what do you remember / recall <key>         Inspect saved memories\n"
+            " • forget my <name> project / forget <key>     Remove specific saved memory\n"
+            " • clear memories / forget everything          Wipe all stored preferences\n\n"
+            "[ACTION HISTORY & AUDIT LOGS]\n"
+            " • what did you do today / what files did you move today  Audit log of past actions\n"
+            " • show action history                         Inspect recent executed operations\n\n"
+            "[UNDO & RECOVERY]\n"
+            " • undo / undo the last action / undo last move Safely restores previous reversible state\n"
+            " * Pre-flight safety: Validates source existence and avoids destination collisions before rollback.\n\n"
             "[SUMMARIZATION (100% Local & Offline - Zero API Keys)]\n"
             " • summarize this text: <text>  Summarize direct text via local Ollama or offline fallback\n"
             " • summarize file <filename>    Extract & summarize contents of any document or file\n"
@@ -562,7 +600,7 @@ class NovaBrain:
             return result
 
         # 2. Open Item disambiguation (if multiple matches exist across filesystem)
-        if intent == NovaIntent.OPEN_ITEM:
+        if intent == NovaIntent.OPEN_ITEM and not parsed.get("app"):
             item_name = parsed["name"]
             kind = parsed.get("kind")
             prep = self.prepare_open(item_name, kind=kind)
@@ -613,6 +651,13 @@ class NovaBrain:
                 self._last_context["last_file"] = parsed.get("name")
             elif intent == NovaIntent.OPEN_APP:
                 self._last_context["last_app"] = parsed.get("name")
+            elif intent == NovaIntent.OPEN_PROJECT:
+                self._last_context["last_project"] = result.get("project")
+                self._last_context["last_folder"] = result.get("path")
+            elif intent == NovaIntent.REMEMBER:
+                if parsed.get("type") == "project_location" or "project" in str(parsed.get("key", "")).lower():
+                    self._last_context["last_project"] = parsed.get("key")
+                    self._last_context["last_folder"] = parsed.get("value")
 
         self._record_history(utterance, result)
         return result

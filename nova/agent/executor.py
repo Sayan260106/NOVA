@@ -33,6 +33,8 @@ class NovaExecutor:
         ollama_client: Optional[Any] = None,
         policy: Optional[NovaPolicy] = None,
         dry_run_power: bool = True,
+        memory: Optional[Any] = None,
+        action_history: Optional[Any] = None,
     ):
         self.file_manager = file_manager
         self.app_manager = app_manager
@@ -40,6 +42,8 @@ class NovaExecutor:
         self.ollama = ollama_client
         self.policy = policy or NovaPolicy()
         self.dry_run_power = dry_run_power
+        self.memory = memory
+        self.action_history = action_history
         self.undo_stack: List[Dict[str, Any]] = []
 
     def execute_plan(
@@ -141,6 +145,31 @@ class NovaExecutor:
             if step_res.success and step_res.undo_info:
                 self.undo_stack.append(step_res.undo_info)
 
+            # Record action in persistent ActionHistory audit log
+            if self.action_history and step.intent not in (NovaIntent.ACTION_HISTORY, NovaIntent.HELP, NovaIntent.LANGUAGE_CHART, NovaIntent.BATTERY_STATUS):
+                try:
+                    affected_paths: List[str] = []
+                    for k in ("path", "source", "destination", "new_path", "old_path", "folder", "directory", "file_name"):
+                        val = step.parameters.get(k) or step_res.get(k)
+                        if val:
+                            affected_paths.append(str(val))
+                    if step_res.get("paths"):
+                        for p in step_res.get("paths"):
+                            affected_paths.append(str(p))
+
+                    self.action_history.record_action(
+                        command=plan.raw_utterance or step.description,
+                        intent=step.intent,
+                        planned_operations=[{"step_id": step.step_id, "action": step.action, "params": step.parameters}],
+                        affected_paths=list(dict.fromkeys(affected_paths)),
+                        success=step_res.success,
+                        result_message=step_res.message,
+                        error_message=step_res.error,
+                        undo_info=step_res.undo_info,
+                    )
+                except Exception as e:
+                    logger.debug(f"Action history recording notice: {e}")
+
             # Update context
             if step_res.success:
                 if step.intent == NovaIntent.CREATE_FOLDER:
@@ -149,6 +178,9 @@ class NovaExecutor:
                     exec_context["last_file"] = step_res.get("file_name")
                 elif step.intent == NovaIntent.OPEN_APP:
                     exec_context["last_app"] = step_res.get("app_name")
+                elif step.intent == NovaIntent.OPEN_PROJECT:
+                    exec_context["last_project"] = step_res.get("project")
+                    exec_context["last_folder"] = step_res.get("path")
             else:
                 all_success = False
                 logger.warning(f"Step {step.step_id} ({step.action}) failed: {step_res.error}. Halting plan.")
@@ -205,6 +237,37 @@ class NovaExecutor:
         if step.intent == NovaIntent.CREATE_FILE and not step.parameters.get("parent"):
             if context.get("last_folder"):
                 step.parameters["parent"] = context["last_folder"]
+
+        # Resolve project_from_step
+        project_from_step = step.parameters.get("project_from_step")
+        if project_from_step and project_from_step in step_outputs:
+            dep_res = step_outputs[project_from_step]
+            if dep_res.success:
+                created_path = dep_res.get("path")
+                if created_path:
+                    step.parameters["project"] = created_path
+
+        # If OPEN_PROJECT has project as "it" or "this"
+        if step.intent == NovaIntent.OPEN_PROJECT:
+            proj = str(step.parameters.get("project", "")).lower()
+            if proj in ("it", "this", "the project", "the folder", "project", "folder") or not step.parameters.get("project"):
+                if context.get("last_folder"):
+                    step.parameters["project"] = context["last_folder"]
+
+        # Resolve name_from_step
+        name_from_step = step.parameters.get("name_from_step")
+        if name_from_step and name_from_step in step_outputs:
+            dep_res = step_outputs[name_from_step]
+            if dep_res.success:
+                created_path = dep_res.get("path") or dep_res.get("folder_name")
+                if created_path:
+                    step.parameters["name"] = created_path
+
+        if step.intent == NovaIntent.OPEN_ITEM:
+            nm = str(step.parameters.get("name", "")).lower()
+            if nm in ("it", "this", "the project", "the folder", "folder"):
+                if context.get("last_folder"):
+                    step.parameters["name"] = context["last_folder"]
 
     def _execute_step_action(self, step: PlanStep, context: Dict[str, Any]) -> ToolResult:
         """Invokes the appropriate manager for a validated step."""
@@ -274,8 +337,11 @@ class NovaExecutor:
 
             elif intent == NovaIntent.OPEN_ITEM:
                 item_name = params["name"]
-                res = self.file_manager.open_item(item_name)
-                if not res.success:
+                app = params.get("app")
+                res = self.file_manager.open_item(item_name, app=app, app_manager=self.app_manager)
+                if not res.success and not app:
+                    if res.data.get("ambiguous"):
+                        return res
                     # Fallback to app open
                     app_res = self.app_manager.open_application(item_name)
                     if app_res.success:
@@ -285,12 +351,55 @@ class NovaExecutor:
                         )
                 return res
 
+            elif intent == NovaIntent.OPEN_PROJECT:
+                project = params["project"]
+                app = params.get("app", "Visual Studio Code")
+                proj_path = self.app_manager.resolve_project_path(project, file_manager=self.file_manager, memory=self.memory)
+                if not proj_path or not proj_path.exists():
+                    return ToolResult.fail(
+                        error=f"Project '{project}' could not be found.",
+                        message=f"Could not locate project '{project}' to launch.",
+                        data={"project": project, "app": app},
+                    )
+                res = self.app_manager.open_application(app, path=proj_path)
+                if not res.success:
+                    return ToolResult.fail(
+                        error=res.error or f"Could not launch '{app}' for project '{project}'.",
+                        message=f"Failed to launch '{app}' in project '{proj_path.name}'.",
+                        data=res.data,
+                    )
+                return ToolResult.ok(
+                    message=f"Opened project '{proj_path.name}' in {res.get('app_name', app)}.",
+                    data={
+                        "project": proj_path.name,
+                        "path": str(proj_path),
+                        "app": res.get("app_name", app),
+                    },
+                )
+
             elif intent == NovaIntent.FIND_ITEM:
-                query = params["query"]
+                query = params.get("query", "")
                 kind = params.get("kind", "any")
-                results = self._find_anything(query, kind=kind)
+                results = self._find_anything(
+                    query=query,
+                    kind=kind,
+                    extension=params.get("extension"),
+                    directory=params.get("directory"),
+                    modified_within_days=params.get("modified_within_days"),
+                    min_size=params.get("min_size"),
+                    max_size=params.get("max_size"),
+                )
                 count = len(results)
-                msg = f"Found {count} matching item(s) for '{query}':" if count > 0 else f"No matches found for '{query}'."
+                filter_parts = []
+                if params.get("extension"):
+                    filter_parts.append(f"type '{params['extension']}'")
+                if params.get("directory"):
+                    filter_parts.append(f"in '{params['directory']}'")
+                if params.get("modified_within_days"):
+                    filter_parts.append(f"modified in last {params['modified_within_days']} days")
+                filter_str = f" ({', '.join(filter_parts)})" if filter_parts else ""
+                target_str = f"'{query}'" if query else "matching items"
+                msg = f"Found {count} matching item(s) for {target_str}{filter_str}:" if count > 0 else f"No matches found for {target_str}{filter_str}."
                 return ToolResult.ok(
                     message=msg,
                     data={"query": query, "results": results, "count": count},
@@ -334,11 +443,218 @@ class NovaExecutor:
                     chart=LANGUAGE_CHART,
                 )
 
+            elif intent == NovaIntent.ORGANIZE_FOLDER:
+                return self.file_manager.organize_folder_by_type(
+                    folder_name=params["folder"],
+                    preview=params.get("preview", False),
+                    conflict_strategy=params.get("conflict_strategy", "rename"),
+                )
+
+            elif intent == NovaIntent.FIND_DUPLICATES:
+                return self.file_manager.find_duplicates(
+                    folder_name=params.get("folder"),
+                )
+
             elif intent == NovaIntent.HELP:
                 return ToolResult.ok(
                     message="Nova Help Manual available.",
                     data={"help": True},
                 )
+
+            elif intent == NovaIntent.REMEMBER:
+                if not self.memory:
+                    return ToolResult.fail(error="Persistent memory is not initialized.")
+                mem_type = params.get("type", "preference")
+                key = params.get("key", "").strip()
+                val = params.get("value", "").strip()
+                if not key or not val:
+                    return ToolResult.fail(error="Memory key or value is missing.")
+
+                clean_proj_key = key.lower()
+                if clean_proj_key.startswith("my "):
+                    clean_proj_key = clean_proj_key[3:].strip()
+                if clean_proj_key.endswith(" project"):
+                    clean_proj_key = clean_proj_key[:-8].strip()
+
+                if mem_type == "project_location" or "project" in key.lower():
+                    self.memory.set_project_location(clean_proj_key, val)
+                    msg = f"I will remember that your {key} is at {val}."
+                elif mem_type == "alias" or "alias" in key.lower():
+                    clean_alias = key.lower().removeprefix("alias ").strip()
+                    self.memory.set_app_alias(clean_alias, val)
+                    msg = f"I will remember application alias '{clean_alias}' -> '{val}'."
+                elif mem_type == "directory" or "directory" in key.lower() or "folder" in key.lower():
+                    clean_dir = key.lower().removeprefix("my ").removesuffix(" directory").removesuffix(" folder").strip()
+                    self.memory.set_common_directory(clean_dir, val)
+                    msg = f"I will remember directory '{clean_dir}' -> {val}."
+                else:
+                    self.memory.set(key, val, category="preference")
+                    msg = f"I will remember that {key} is {val}."
+
+                return ToolResult.ok(
+                    message=msg,
+                    data={"key": key, "value": val, "type": mem_type},
+                )
+
+            elif intent == NovaIntent.RECALL:
+                if not self.memory:
+                    return ToolResult.fail(error="Persistent memory is not initialized.")
+                key = params.get("key")
+                if key:
+                    clean_k = key.strip().strip("'\" ")
+                    clean_lookup = clean_k.lower()
+                    if clean_lookup.startswith("my "):
+                        clean_lookup = clean_lookup[3:].strip()
+                    if clean_lookup.endswith(" project"):
+                        clean_lookup = clean_lookup[:-8].strip()
+
+                    val = (
+                        self.memory.get_project_location(clean_lookup)
+                        or self.memory.get_app_alias(clean_k.lower())
+                        or self.memory.get_common_directory(clean_lookup)
+                        or self.memory.get(clean_k)
+                    )
+                    if val is not None:
+                        return ToolResult.ok(
+                            message=f"{clean_k}: {val}",
+                            data={"key": clean_k, "value": val},
+                        )
+                    else:
+                        return ToolResult.fail(
+                            error=f"No stored memory found for '{clean_k}'.",
+                            message=f"I don't have any memory stored for '{clean_k}'.",
+                            data={"key": clean_k},
+                        )
+                else:
+                    all_mems = self.memory.list_all()
+                    if not all_mems:
+                        return ToolResult.ok(
+                            message="No preferences or locations currently saved in memory.",
+                            data={"memories": {}},
+                        )
+                    grouped: Dict[str, Dict[str, str]] = {}
+                    for item in all_mems:
+                        cat = item.get("category", "preference")
+                        grouped.setdefault(cat, {})[item.get("key", "")] = item.get("value", "")
+
+                    lines = ["Stored NOVA Preferences & Context:"]
+                    for cat, items in grouped.items():
+                        lines.append(f"\n[{cat.upper()}]:")
+                        for k, v in items.items():
+                            lines.append(f" • {k}: {v}")
+                    return ToolResult.ok(
+                        message="\n".join(lines),
+                        data={"memories": grouped},
+                    )
+
+            elif intent == NovaIntent.FORGET:
+                if not self.memory:
+                    return ToolResult.fail(error="Persistent memory is not initialized.")
+                if params.get("all"):
+                    self.memory.clear_all()
+                    return ToolResult.ok(
+                        message="Cleared all stored preferences, projects, and aliases from memory.",
+                        data={"cleared": "all"},
+                    )
+                key = params.get("key", "").strip().strip("'\" ")
+                if not key:
+                    return ToolResult.fail(error="Key to forget is missing.")
+
+                clean_proj = key.lower()
+                if clean_proj.startswith("my "):
+                    clean_proj = clean_proj[3:].strip()
+                if clean_proj.endswith(" project"):
+                    clean_proj = clean_proj[:-8].strip()
+                if clean_proj.startswith("project "):
+                    clean_proj = clean_proj[8:].strip()
+
+                deleted = (
+                    self.memory.delete_project_location(clean_proj)
+                    or self.memory.delete(key, category="alias")
+                    or self.memory.delete(key, category="common_dir")
+                    or self.memory.delete(key, category="preference")
+                    or self.memory.delete(key)
+                )
+                if deleted:
+                    return ToolResult.ok(
+                        message=f"I have removed '{key}' from my memory.",
+                        data={"key": key, "forgotten": True},
+                    )
+                else:
+                    return ToolResult.ok(
+                        message=f"No memory found matching '{key}' to forget.",
+                        data={"key": key, "forgotten": False},
+                    )
+
+            elif intent == NovaIntent.ACTION_HISTORY:
+                if not self.action_history:
+                    return ToolResult.fail(error="Action history tracker is not initialized.")
+                is_today = params.get("today", True)
+                intent_filter = params.get("intent_filter")
+                if is_today:
+                    records = self.action_history.get_actions_today(intent=intent_filter)
+                else:
+                    records = self.action_history.get_recent_actions(limit=params.get("limit", 15), intent=intent_filter)
+
+                if not records:
+                    filt_desc = f" for '{intent_filter}'" if intent_filter else ""
+                    time_desc = "today" if is_today else "recently"
+                    return ToolResult.ok(
+                        message=f"No actions recorded{filt_desc} {time_desc}.",
+                        data={"records": []},
+                    )
+
+                lines = [f"NOVA Action History ({'Today' if is_today else 'Recent'}):"]
+                for r in records:
+                    iso = r.get("iso_time", "")
+                    ts = iso[11:19] if len(iso) >= 19 else str(r.get("timestamp", ""))[:10]
+                    status = "Success" if r.get("success") else "Failed"
+                    cmd = r.get("command") or r.get("user_command", "Operation")
+                    paths = ", ".join(r.get("affected_paths", []))
+                    line = f" • [{ts}] {cmd} [{status}]"
+                    if paths:
+                        line += f" -> {paths}"
+                    if r.get("undone") or r.get("is_undone"):
+                        line += " (Undone)"
+                    lines.append(line)
+
+                return ToolResult.ok(
+                    message="\n".join(lines),
+                    data={"records": records, "count": len(records)},
+                )
+
+            elif intent == NovaIntent.UNDO:
+                if not self.action_history:
+                    return ToolResult.fail(error="Action history tracker is not initialized.")
+                filt = params.get("filter")
+                record = self.action_history.get_last_undoable_action(intent=filt)
+                if not record:
+                    return ToolResult.fail(
+                        error="No undoable operations found.",
+                        message="There are no recent reversible operations to undo.",
+                    )
+
+                undo_info = record.get("undo_info")
+                is_valid, val_err = self.action_history.validate_rollback(undo_info, policy=self.policy)
+                if not is_valid:
+                    return ToolResult.fail(
+                        error=val_err or "Rollback safety validation failed.",
+                        message=f"Cannot safely undo: {val_err}",
+                        data={"record": record},
+                    )
+
+                rollback_res = self.action_history.execute_rollback(record, file_manager=self.file_manager, policy=self.policy)
+                if rollback_res.success:
+                    return ToolResult.ok(
+                        message=f"Undo successful: {rollback_res.message}",
+                        data={"undone_action": record, "details": rollback_res.data},
+                    )
+                else:
+                    return ToolResult.fail(
+                        error=rollback_res.error,
+                        message=f"Failed to undo '{record['command']}': {rollback_res.error}",
+                        data={"record": record},
+                    )
 
             return ToolResult.fail(error=f"Unsupported action for intent '{intent}'.")
 
@@ -424,31 +740,53 @@ class NovaExecutor:
 
         return result
 
-    def _find_anything(self, query: str, kind: str = "any") -> List[Dict[str, Any]]:
-        """Unified finder across applications, files, and folders."""
+    def _find_anything(
+        self,
+        query: str = "",
+        kind: str = "any",
+        extension: Optional[Any] = None,
+        directory: Optional[Any] = None,
+        modified_within_days: Optional[float] = None,
+        min_size: Optional[int] = None,
+        max_size: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Unified finder across applications, files, and folders with advanced filters."""
         results: List[Dict[str, Any]] = []
 
-        if kind in ("any", "app"):
-            app_matches = self.app_manager.find_applications(query, limit=5)
-            for app, score in app_matches:
-                results.append({
-                    "name": app.name,
-                    "kind": "application",
-                    "source": app.source,
-                    "target": app.app_id or app.path or app.name,
-                    "confidence": round(score, 2),
-                })
+        if kind in ("any", "app") and not (extension or modified_within_days or min_size or directory):
+            if query:
+                app_matches = self.app_manager.find_applications(query, limit=5)
+                for app, score in app_matches:
+                    results.append({
+                        "name": app.name,
+                        "kind": "application",
+                        "source": app.source,
+                        "target": app.app_id or app.path or app.name,
+                        "confidence": round(score, 2),
+                    })
 
-        if kind in ("any", "file", "folder"):
+        if kind in ("any", "file", "folder") or (extension or directory or modified_within_days or min_size):
             f_kind = "any" if kind == "any" else kind
-            file_matches = self.file_manager.find_items(query, kind=f_kind, limit=10)
+            file_matches = self.file_manager.find_advanced(
+                query=query,
+                kind=f_kind,
+                extension=extension,
+                directory=directory,
+                modified_within_days=modified_within_days,
+                min_size=min_size,
+                max_size=max_size,
+                limit=15,
+            )
             for item in file_matches:
                 results.append({
                     "name": item["name"],
                     "kind": item["type"],
                     "path": item["path"],
                     "size": item.get("size", 0),
+                    "size_formatted": item.get("size_formatted", ""),
+                    "mtime": item.get("mtime", 0),
                     "parent": item.get("parent_name", ""),
+                    "score": item.get("score", 0),
                 })
 
         return results

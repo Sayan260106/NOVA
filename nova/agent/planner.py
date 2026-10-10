@@ -94,10 +94,19 @@ class NovaPlanner:
         NovaIntent.BATTERY_STATUS: "battery_status",
         NovaIntent.LANGUAGE_CHART: "language_chart",
         NovaIntent.HELP: "help",
+        NovaIntent.ORGANIZE_FOLDER: "organize_folder",
+        NovaIntent.FIND_DUPLICATES: "find_duplicates",
+        NovaIntent.OPEN_PROJECT: "open_project",
+        NovaIntent.REMEMBER: "remember",
+        NovaIntent.RECALL: "recall",
+        NovaIntent.FORGET: "forget",
+        NovaIntent.ACTION_HISTORY: "action_history",
+        NovaIntent.UNDO: "undo",
     }
 
-    def __init__(self, intent_parser: Optional[IntentParser] = None):
+    def __init__(self, intent_parser: Optional[IntentParser] = None, memory: Optional[Any] = None):
         self.intent_parser = intent_parser or IntentParser()
+        self.memory = memory
 
     def build_plan(
         self,
@@ -135,7 +144,7 @@ class NovaPlanner:
             sub_intent = sub_parsed.get("intent", NovaIntent.UNKNOWN)
 
             # Argument validation and cleaning
-            step_obj, err = self._create_step(step_id, sub_intent, sub_parsed, sub_cmd)
+            step_obj, err = self._create_step(step_id, sub_intent, sub_parsed, sub_cmd, context=context)
             if err:
                 return ExecutionPlan(
                     raw_utterance=utterance,
@@ -169,6 +178,24 @@ class NovaPlanner:
                     if last_created_folder_step is not None:
                         step_obj.dependencies.append(last_created_folder_step)
 
+            elif sub_intent == NovaIntent.OPEN_PROJECT:
+                proj = step_obj.parameters.get("project", "").lower()
+                if proj in ("it", "this", "the project", "the folder", "project", "folder") or (last_created_folder_name and proj == last_created_folder_name.lower()):
+                    if last_created_folder_step is not None:
+                        step_obj.dependencies.append(last_created_folder_step)
+                        step_obj.parameters["project_from_step"] = last_created_folder_step
+                        if last_created_folder_name:
+                            step_obj.parameters["project"] = last_created_folder_name
+
+            elif sub_intent == NovaIntent.OPEN_ITEM:
+                nm = step_obj.parameters.get("name", "").lower()
+                if nm in ("it", "this", "the project", "the folder", "folder"):
+                    if last_created_folder_step is not None:
+                        step_obj.dependencies.append(last_created_folder_step)
+                        step_obj.parameters["name_from_step"] = last_created_folder_step
+                        if last_created_folder_name:
+                            step_obj.parameters["name"] = last_created_folder_name
+
             steps.append(step_obj)
             step_id += 1
 
@@ -188,7 +215,7 @@ class NovaPlanner:
     ) -> ExecutionPlan:
         """Constructs an ExecutionPlan for a single intent."""
         intent = parsed.get("intent", NovaIntent.UNKNOWN)
-        step_obj, err = self._create_step(1, intent, parsed, utterance)
+        step_obj, err = self._create_step(1, intent, parsed, utterance, context=context)
 
         if err:
             return ExecutionPlan(
@@ -213,11 +240,13 @@ class NovaPlanner:
         intent: str,
         parsed_data: Dict[str, Any],
         raw_text: str,
+        context: Optional[Dict[str, Any]] = None,
     ) -> tuple[Optional[PlanStep], Optional[str]]:
         """Validates parameters and builds a PlanStep instance."""
         action = self.INTENT_TO_ACTION.get(intent, intent.lower())
         is_destructive = intent in self.DESTRUCTIVE_INTENTS
         params = dict(parsed_data)
+        ctx = dict(context or {})
 
         # Validate parameters according to intent rules
         if intent == NovaIntent.CREATE_FOLDER:
@@ -227,7 +256,21 @@ class NovaPlanner:
             params["name"] = name
             parent = params.get("parent")
             if parent:
-                params["parent"] = parent.strip().strip("'\" ")
+                parent_clean = parent.strip().strip("'\" ")
+                if parent_clean.lower() in ("there", "that folder", "the folder", "that directory", "my current project", "current project", "my project"):
+                    resolved_p = ctx.get("last_folder") or ctx.get("last_project")
+                    if not resolved_p and self.memory:
+                        projects = self.memory.list_projects()
+                        if projects:
+                            resolved_p = list(projects.values())[-1]
+                    if resolved_p:
+                        parent_clean = resolved_p
+                elif self.memory and parent_clean.lower().startswith("my ") and parent_clean.lower().endswith(" project"):
+                    proj_k = parent_clean[3:-8].strip()
+                    loc = self.memory.get_project_location(proj_k)
+                    if loc:
+                        parent_clean = loc
+                params["parent"] = parent_clean
             desc = f"Create folder '{name}'" + (f" inside '{params['parent']}'" if parent else " in D: drive")
 
         elif intent == NovaIntent.CREATE_FILE:
@@ -237,7 +280,21 @@ class NovaPlanner:
             params["name"] = name
             parent = params.get("parent")
             if parent:
-                params["parent"] = parent.strip().strip("'\" ")
+                parent_clean = parent.strip().strip("'\" ")
+                if parent_clean.lower() in ("there", "that folder", "the folder", "that directory", "my current project", "current project", "my project"):
+                    resolved_p = ctx.get("last_folder") or ctx.get("last_project")
+                    if not resolved_p and self.memory:
+                        projects = self.memory.list_projects()
+                        if projects:
+                            resolved_p = list(projects.values())[-1]
+                    if resolved_p:
+                        parent_clean = resolved_p
+                elif self.memory and parent_clean.lower().startswith("my ") and parent_clean.lower().endswith(" project"):
+                    proj_k = parent_clean[3:-8].strip()
+                    loc = self.memory.get_project_location(proj_k)
+                    if loc:
+                        parent_clean = loc
+                params["parent"] = parent_clean
             content = params.get("content", "")
             desc = f"Create file '{name}'" + (f" with {len(content)} chars" if content else "")
 
@@ -284,17 +341,46 @@ class NovaPlanner:
 
         elif intent == NovaIntent.OPEN_ITEM:
             name = params.get("name", "").strip().strip("'\" ")
+            if name.lower() in ("that file", "the file", "the file i opened earlier", "it"):
+                resolved_f = ctx.get("last_file")
+                if resolved_f:
+                    name = resolved_f
             if not name:
                 return None, "Item name to open is missing."
             params["name"] = name
-            desc = f"Open item '{name}'"
+            app = params.get("app")
+            if app:
+                params["app"] = str(app).strip().strip("'\" ")
+                desc = f"Open item '{name}' with '{params['app']}'"
+            else:
+                desc = f"Open item '{name}'"
+
+        elif intent == NovaIntent.OPEN_PROJECT:
+            project = params.get("project", "").strip().strip("'\" ")
+            if project.lower() in ("my current project", "current project", "this project", "that project", "it", "my project"):
+                resolved_proj = ctx.get("last_project") or ctx.get("last_folder")
+                if not resolved_proj and self.memory:
+                    projects = self.memory.list_projects()
+                    if projects:
+                        resolved_proj = list(projects.keys())[-1]
+                if resolved_proj:
+                    project = resolved_proj
+            app = params.get("app", "Visual Studio Code").strip().strip("'\" ")
+            if not project:
+                return None, "Project name or location is missing."
+            params["project"] = project
+            params["app"] = app or "Visual Studio Code"
+            desc = f"Open project '{project}' in '{params['app']}'"
 
         elif intent == NovaIntent.FIND_ITEM:
             query = params.get("query", "").strip()
-            if not query:
-                return None, "Search query is empty."
+            ext = params.get("extension")
+            dir_name = params.get("directory")
+            kind = params.get("kind", "any")
+            if not query and not ext and not dir_name and kind in (None, "any"):
+                return None, "Search query or filter is empty."
             params["query"] = query
-            desc = f"Search for '{query}'"
+            desc = f"Search for '{query or ext or 'items'}'" + (f" in '{dir_name}'" if dir_name else "")
 
         elif intent == NovaIntent.SUMMARIZE:
             target_type = params.get("target_type", "text")
@@ -307,6 +393,53 @@ class NovaPlanner:
             params["delay"] = delay
             is_destructive = True
             desc = f"{'Restart' if intent == NovaIntent.RESTART_SYSTEM else 'Shutdown'} system in {delay}s"
+
+        elif intent == NovaIntent.ORGANIZE_FOLDER:
+            folder = params.get("folder", "").strip().strip("'\" ")
+            if not folder:
+                return None, "Folder to organize is missing."
+            params["folder"] = folder
+            is_preview = bool(params.get("preview", False))
+            desc = f"{'Preview organizing' if is_preview else 'Organize'} folder '{folder}' by file type"
+
+        elif intent == NovaIntent.FIND_DUPLICATES:
+            folder = params.get("folder")
+            desc = f"Find duplicate files" + (f" in '{folder}'" if folder else "")
+
+        elif intent == NovaIntent.REMEMBER:
+            key = params.get("key", "").strip().strip("'\" ")
+            val = params.get("value", "").strip().strip("'\" ")
+            if not key or not val:
+                return None, "Memory key or value is missing."
+            params["key"] = key
+            params["value"] = val
+            desc = f"Remember {key} = {val}"
+
+        elif intent == NovaIntent.RECALL:
+            key = params.get("key")
+            if key:
+                params["key"] = key.strip().strip("'\" ")
+                desc = f"Recall memory for '{params['key']}'"
+            else:
+                desc = "Recall stored preferences"
+
+        elif intent == NovaIntent.FORGET:
+            key = params.get("key")
+            if key:
+                params["key"] = key.strip().strip("'\" ")
+                desc = f"Forget memory for '{params['key']}'"
+            elif params.get("all"):
+                desc = "Forget all memories"
+            else:
+                return None, "Memory key to forget is missing."
+
+        elif intent == NovaIntent.ACTION_HISTORY:
+            filt = params.get("intent_filter")
+            desc = f"Show history for {filt}" if filt else "Show action audit log"
+
+        elif intent == NovaIntent.UNDO:
+            filt = params.get("filter")
+            desc = f"Undo last {filt}" if filt else "Undo last operation"
 
         elif intent in (NovaIntent.LOCK_SYSTEM, NovaIntent.SLEEP_SYSTEM, NovaIntent.ABORT_POWER, NovaIntent.BATTERY_STATUS, NovaIntent.LANGUAGE_CHART, NovaIntent.HELP):
             desc = action.replace("_", " ").title()

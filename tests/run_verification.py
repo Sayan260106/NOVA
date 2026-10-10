@@ -191,13 +191,94 @@ def run_verification():
         print(f"[FAIL] Goal a Multi-Step Verification: Expected files not found on disk. demo={demo_file.exists()}, suite={suite_file.exists()}")
         all_passed = False
 
+    # Phase 3 Checkpoints: Persistent Memory, Action History, Recovery & Rollback
+    print("\n--- PHASE 3: PERSISTENT MEMORY, ACTION AUDIT & SAFE ROLLBACK ---")
+    phase3_dir = DEFAULT_WORKSPACE / "Phase3Sandbox"
+    phase3_dir.mkdir(parents=True, exist_ok=True)
+
+    # Checkpoint 3.1: Persistent User Memory - Remember project location
+    total_commands += 1
+    rem_res = brain.process(f"Remember that my NOVA project is in {phase3_dir}")
+    if rem_res.get("success") and brain.memory.get_project_location("nova"):
+        print(f"[PASS] Phase 3.1: Stored persistent project location -> {phase3_dir}")
+        passed_commands += 1
+    else:
+        print("[FAIL] Phase 3.1: Failed to store persistent project location.")
+        all_passed = False
+
+    # Checkpoint 3.2: Recall memory
+    total_commands += 1
+    rec_res = brain.process("what do you remember")
+    if rec_res.get("success") and "nova" in rec_res.get("response", "").lower():
+        print("[PASS] Phase 3.2: Successfully recalled memories from SQLite store.")
+        passed_commands += 1
+    else:
+        print("[FAIL] Phase 3.2: Failed to recall stored memories.")
+        all_passed = False
+
+    # Checkpoint 3.3: Context-aware resolution ("there" resolves to remembered project)
+    total_commands += 1
+    ctx_res = brain.process("Create folder tests there")
+    if ctx_res.get("success") and (phase3_dir / "tests").exists():
+        print(f"[PASS] Phase 3.3: Context resolution -> Created 'tests' inside {phase3_dir}")
+        passed_commands += 1
+    else:
+        print("[FAIL] Phase 3.3: Failed context-aware folder creation.")
+        all_passed = False
+
+    # Checkpoint 3.4: Action History - Record and query actions today
+    total_commands += 1
+    test_move_file = phase3_dir / "audit_item.txt"
+    test_move_file.write_text("Audit trace content", encoding="utf-8")
+    move_dest_dir = phase3_dir / "tests"
+    move_res = brain.process(f"move {test_move_file} to {move_dest_dir}")
+    today_hist_res = brain.process("What files did you move today?")
+    if today_hist_res.get("success") and "audit_item.txt" in today_hist_res.get("response", ""):
+        print("[PASS] Phase 3.4: Action history recorded and retrieved today's file move.")
+        passed_commands += 1
+    else:
+        print(f"[FAIL] Phase 3.4: Failed action history retrieval: {today_hist_res}")
+        all_passed = False
+
+    # Checkpoint 3.5: Safe Rollback & Undo
+    total_commands += 1
+    undo_res = brain.process("Undo the last file move")
+    if undo_res.get("success") and test_move_file.exists() and not (move_dest_dir / "audit_item.txt").exists():
+        print("[PASS] Phase 3.5: Successfully validated and restored moved file to original location.")
+        passed_commands += 1
+    else:
+        print(f"[FAIL] Phase 3.5: Undo operation failed: {undo_res}")
+        all_passed = False
+
+    # Checkpoint 3.6: Rollback Collision Prevention
+    total_commands += 1
+    brain.process(f"move {test_move_file} to {move_dest_dir}")
+    test_move_file.write_text("Conflicting new file", encoding="utf-8")
+    blocked_undo = brain.process("undo")
+    if not blocked_undo.get("success") and "already exists" in blocked_undo.get("response", "").lower():
+        print("[PASS] Phase 3.6: Pre-flight collision prevention correctly rejected unsafe undo.")
+        passed_commands += 1
+    else:
+        print(f"[FAIL] Phase 3.6: Collision guard failed to reject overwrite: {blocked_undo}")
+        all_passed = False
+
+    # Checkpoint 3.7: Memory Management & Privacy - Forget
+    total_commands += 1
+    forget_res = brain.process("Forget my NOVA project")
+    if forget_res.get("success") and brain.memory.get_project_location("nova") is None and phase3_dir.exists():
+        print("[PASS] Phase 3.7: Successfully removed memory preference while preserving physical filesystem.")
+        passed_commands += 1
+    else:
+        print("[FAIL] Phase 3.7: Forget preference failed.")
+        all_passed = False
+
     # Cleanup temporary test items
     brain.process("delete file DualTarget.txt permanently")
     brain.process("delete folder DualTarget permanently")
     brain.process("delete file clash_item.txt permanently")
     brain.process("delete folder ConflictDirA permanently")
     brain.process("delete folder ConflictDirB permanently")
-    for test_dir in ["Project", "TestSuite", "SummaryVault"]:
+    for test_dir in ["Project", "TestSuite", "SummaryVault", "Phase3Sandbox"]:
         p = DEFAULT_WORKSPACE / test_dir
         if p.exists():
             shutil.rmtree(p, ignore_errors=True)

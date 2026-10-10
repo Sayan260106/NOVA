@@ -7,9 +7,11 @@ create, delete, rename, move, copy, open, and find across all drives in File Exp
 import os
 import re
 import shutil
+import hashlib
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union, Set
+from collections import defaultdict
 
 import send2trash
 
@@ -25,12 +27,24 @@ from nova.core.results import ToolResult
 
 logger = logging.getLogger("nova.file_manager")
 
+# Categories for folder organization by file extension
+ORGANIZATION_CATEGORIES: Dict[str, Set[str]] = {
+    "Documents": {".pdf", ".docx", ".doc", ".txt", ".pptx", ".ppt", ".xlsx", ".xls", ".csv", ".rtf", ".odt", ".epub"},
+    "Images": {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp", ".ico", ".tiff"},
+    "Videos": {".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m4v"},
+    "Audio": {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".wma"},
+    "Archives": {".zip", ".tar", ".gz", ".7z", ".rar", ".bz2", ".xz", ".iso"},
+    "Code": {".py", ".js", ".ts", ".html", ".css", ".cpp", ".c", ".h", ".hpp", ".java", ".rs", ".go", ".json", ".sql", ".yaml", ".yml", ".xml", ".sh", ".ps1"},
+    "Installers": {".exe", ".msi", ".bat", ".cmd"},
+}
+
 
 class FileManager:
     """Provides smart zero-path file and directory operations for Nova."""
 
-    def __init__(self, indexer: Optional[Indexer] = None):
+    def __init__(self, indexer: Optional[Indexer] = None, default_root: Optional[Union[str, Path]] = None):
         self.indexer = indexer or Indexer()
+        self.default_root = Path(default_root).resolve() if default_root else None
 
     def resolve_target(
         self,
@@ -64,6 +78,15 @@ class FileManager:
         if candidate.is_absolute() and candidate.exists():
             if is_dir is None or candidate.is_dir() == is_dir:
                 return candidate.resolve()
+
+        # 2b. Check default_root if configured
+        if self.default_root and self.default_root.exists():
+            direct_root_child = self.default_root / target_name
+            if direct_root_child.exists() and (is_dir is None or direct_root_child.is_dir() == is_dir):
+                return direct_root_child.resolve()
+            for sub_p in self.default_root.rglob(target_name):
+                if is_dir is None or sub_p.is_dir() == is_dir:
+                    return sub_p.resolve()
 
         # 3. Check Priority Roots
         for root in PRIORITY_SEARCH_ROOTS:
@@ -345,8 +368,8 @@ class FileManager:
         If parent_name is specified, resolves the parent folder path automatically.
         If parent_name is omitted, creates in D: drive (DEFAULT_WORKSPACE).
         """
-        target_parent = DEFAULT_WORKSPACE
-        resolved_parent_msg = f"D: drive ({DEFAULT_WORKSPACE})" if str(DEFAULT_WORKSPACE).startswith("D:") else "default workspace"
+        target_parent = self.default_root if self.default_root else DEFAULT_WORKSPACE
+        resolved_parent_msg = f"D: drive ({target_parent})" if str(target_parent).startswith("D:") else f"workspace ({target_parent.name})"
 
         if parent_name:
             clean_parent = re.sub(r"\s+(folder|directory|dir|drive)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ")
@@ -413,8 +436,8 @@ class FileManager:
         If parent_name is specified, locates the folder automatically.
         If parent_name is omitted, creates in D: drive (DEFAULT_WORKSPACE).
         """
-        target_parent = DEFAULT_WORKSPACE
-        resolved_parent_msg = f"D: drive ({DEFAULT_WORKSPACE})" if str(DEFAULT_WORKSPACE).startswith("D:") else "default workspace"
+        target_parent = self.default_root if self.default_root else DEFAULT_WORKSPACE
+        resolved_parent_msg = f"D: drive ({target_parent})" if str(target_parent).startswith("D:") else f"workspace ({target_parent.name})"
 
         if parent_name:
             clean_parent = re.sub(r"\s+(folder|directory|dir|drive)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ")
@@ -737,6 +760,309 @@ class FileManager:
                 data={"source_name": source_name, "destination": destination_folder_name},
             )
 
+    def resolve_conflict_path(
+        self,
+        target_path: Path,
+        strategy: str = "rename",
+    ) -> Optional[Path]:
+        """
+        Resolves path conflict if file already exists at destination.
+        strategy:
+          - 'rename': appends (1), (2), etc. before suffix.
+          - 'skip': returns None.
+          - 'overwrite': returns original path.
+        """
+        if not target_path.exists():
+            return target_path
+
+        if strategy == "skip":
+            return None
+        elif strategy == "overwrite":
+            return target_path
+
+        # Default strategy: rename to avoid overwrite
+        parent = target_path.parent
+        stem = target_path.stem
+        suffix = target_path.suffix
+        idx = 1
+        while True:
+            candidate = parent / f"{stem} ({idx}){suffix}"
+            if not candidate.exists():
+                return candidate
+            idx += 1
+
+    def organize_folder_by_type(
+        self,
+        folder_name: str,
+        preview: bool = False,
+        conflict_strategy: str = "rename",
+    ) -> ToolResult:
+        """
+        Organizes files in a target folder into category subfolders based on extension.
+        Skips subdirectories. Supports dry-run preview and safe conflict resolution.
+        """
+        target_dir = self.resolve_target(folder_name, is_dir=True)
+        if not target_dir or not target_dir.exists() or not target_dir.is_dir():
+            return ToolResult.fail(
+                error=f"Folder '{folder_name}' could not be located to organize.",
+                data={"folder_name": folder_name},
+            )
+
+        # Plan moves
+        moves: List[Dict[str, Any]] = []
+        try:
+            for item in target_dir.iterdir():
+                if item.is_dir():
+                    continue  # Do not touch subfolders
+
+                ext = item.suffix.lower()
+                category = "Others"
+                for cat_name, ext_set in ORGANIZATION_CATEGORIES.items():
+                    if ext in ext_set:
+                        category = cat_name
+                        break
+
+                dest_folder = target_dir / category
+                dest_file = dest_folder / item.name
+                resolved_dest = self.resolve_conflict_path(dest_file, strategy=conflict_strategy)
+                if resolved_dest is None:
+                    continue  # Skipped due to conflict strategy
+
+                moves.append({
+                    "source": str(item.resolve()),
+                    "destination": str(resolved_dest.resolve()),
+                    "category": category,
+                    "file_name": item.name,
+                    "target_name": resolved_dest.name,
+                })
+        except Exception as e:
+            return ToolResult.fail(
+                error=f"Error scanning folder '{target_dir.name}': {str(e)}",
+                data={"folder": str(target_dir)},
+            )
+
+        if preview:
+            return ToolResult.ok(
+                message=f"Preview: {len(moves)} file(s) would be organized into category subfolders in '{target_dir.name}'.",
+                data={
+                    "folder": str(target_dir),
+                    "preview": True,
+                    "count": len(moves),
+                    "moves": moves,
+                },
+            )
+
+        # Execute moves
+        executed_moves: List[Dict[str, Any]] = []
+        errors: List[str] = []
+        for m in moves:
+            src = Path(m["source"])
+            dst = Path(m["destination"])
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
+                self.indexer.remove_item(src)
+                self.indexer.record_item(dst)
+                executed_moves.append(m)
+            except Exception as e:
+                errors.append(f"Failed to move '{src.name}': {str(e)}")
+
+        count = len(executed_moves)
+        if count == 0 and len(moves) == 0:
+            return ToolResult.ok(
+                message=f"Folder '{target_dir.name}' is already organized or contains no files to move.",
+                data={"folder": str(target_dir), "count": 0, "moves": []},
+            )
+
+        err_msg = f" ({len(errors)} error(s))" if errors else ""
+        return ToolResult.ok(
+            message=f"Successfully organized {count} file(s) in '{target_dir.name}' by file type{err_msg}.",
+            data={
+                "folder": str(target_dir),
+                "count": count,
+                "moves": executed_moves,
+                "errors": errors,
+            },
+            undo_info={
+                "action": "bulk_move",
+                "moves": [{"source": m["destination"], "destination": m["source"]} for m in executed_moves],
+            },
+        )
+
+    def bulk_move(
+        self,
+        items: List[str],
+        destination_folder_name: str,
+        conflict_strategy: str = "rename",
+    ) -> ToolResult:
+        """Moves multiple files or folders to a target destination folder."""
+        dest_dir = self.resolve_target(destination_folder_name, is_dir=True)
+        if not dest_dir or not dest_dir.is_dir():
+            return ToolResult.fail(
+                error=f"Destination folder '{destination_folder_name}' could not be located.",
+                data={"destination": destination_folder_name},
+            )
+
+        moved: List[Dict[str, str]] = []
+        errors: List[str] = []
+
+        for item_name in items:
+            src = self.resolve_target(item_name)
+            if not src or not src.exists():
+                errors.append(f"Item '{item_name}' could not be located.")
+                continue
+
+            dest_target = dest_dir / src.name
+            resolved_dest = self.resolve_conflict_path(dest_target, strategy=conflict_strategy)
+            if resolved_dest is None:
+                continue
+
+            try:
+                shutil.move(str(src), str(resolved_dest))
+                self.indexer.remove_item(src)
+                self.indexer.record_item(resolved_dest)
+                moved.append({"source": str(src.resolve()), "destination": str(resolved_dest.resolve())})
+            except Exception as e:
+                errors.append(f"Failed to move '{src.name}': {str(e)}")
+
+        return ToolResult.ok(
+            message=f"Bulk moved {len(moved)} of {len(items)} items to '{dest_dir.name}'.",
+            data={"moved": moved, "errors": errors, "destination": str(dest_dir)},
+            undo_info={
+                "action": "bulk_move",
+                "moves": [{"source": m["destination"], "destination": m["source"]} for m in moved],
+            },
+        )
+
+    def bulk_copy(
+        self,
+        items: List[str],
+        destination_folder_name: str,
+        conflict_strategy: str = "rename",
+    ) -> ToolResult:
+        """Copies multiple files or folders to a target destination folder."""
+        dest_dir = self.resolve_target(destination_folder_name, is_dir=True)
+        if not dest_dir or not dest_dir.is_dir():
+            return ToolResult.fail(
+                error=f"Destination folder '{destination_folder_name}' could not be located.",
+                data={"destination": destination_folder_name},
+            )
+
+        copied: List[Dict[str, str]] = []
+        errors: List[str] = []
+
+        for item_name in items:
+            src = self.resolve_target(item_name)
+            if not src or not src.exists():
+                errors.append(f"Item '{item_name}' could not be located.")
+                continue
+
+            dest_target = dest_dir / src.name
+            resolved_dest = self.resolve_conflict_path(dest_target, strategy=conflict_strategy)
+            if resolved_dest is None:
+                continue
+
+            try:
+                if src.is_dir():
+                    shutil.copytree(str(src), str(resolved_dest))
+                else:
+                    shutil.copy2(str(src), str(resolved_dest))
+                self.indexer.record_item(resolved_dest)
+                copied.append({"source": str(src.resolve()), "destination": str(resolved_dest.resolve())})
+            except Exception as e:
+                errors.append(f"Failed to copy '{src.name}': {str(e)}")
+
+        return ToolResult.ok(
+            message=f"Bulk copied {len(copied)} of {len(items)} items to '{dest_dir.name}'.",
+            data={"copied": copied, "errors": errors, "destination": str(dest_dir)},
+        )
+
+    def find_duplicates(
+        self,
+        folder_name: Optional[str] = None,
+        max_files: int = 1000,
+    ) -> ToolResult:
+        """
+        Scans a folder for duplicate files using size grouping and SHA256 checksum matching.
+        """
+        target_dir = self.resolve_target(folder_name, is_dir=True) if folder_name else DEFAULT_WORKSPACE
+        if not target_dir or not target_dir.exists() or not target_dir.is_dir():
+            return ToolResult.fail(
+                error=f"Folder '{folder_name}' could not be located to check duplicates.",
+                data={"folder_name": folder_name},
+            )
+
+        # 1. Group files by size
+        size_groups: Dict[int, List[Path]] = defaultdict(list)
+        count = 0
+        try:
+            for root, dirs, files in os.walk(target_dir):
+                dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED_DIR_NAMES]
+                for f in files:
+                    fp = Path(root) / f
+                    try:
+                        sz = fp.stat().st_size
+                        if sz > 0:  # ignore 0-byte empty files
+                            size_groups[sz].append(fp)
+                            count += 1
+                            if count >= max_files:
+                                break
+                    except (PermissionError, OSError):
+                        continue
+                if count >= max_files:
+                    break
+        except Exception as e:
+            return ToolResult.fail(error=f"Error scanning for duplicates: {str(e)}")
+
+        # 2. Hash files with identical sizes
+        duplicate_groups: List[Dict[str, Any]] = []
+        wasted_bytes = 0
+
+        for sz, files in size_groups.items():
+            if len(files) < 2:
+                continue
+
+            hash_buckets: Dict[str, List[Path]] = defaultdict(list)
+            for f in files:
+                try:
+                    h = hashlib.sha256()
+                    with open(f, "rb") as fh:
+                        while chunk := fh.read(65536):
+                            h.update(chunk)
+                    hash_buckets[h.hexdigest()].append(f)
+                except (PermissionError, OSError):
+                    continue
+
+            for hval, dups in hash_buckets.items():
+                if len(dups) > 1:
+                    wasted_bytes += sz * (len(dups) - 1)
+                    duplicate_groups.append({
+                        "hash": hval,
+                        "size": sz,
+                        "size_formatted": f"{sz / 1024:.1f} KB" if sz < 1048576 else f"{sz / 1048576:.1f} MB",
+                        "files": [str(p.resolve()) for p in dups],
+                        "count": len(dups),
+                    })
+
+        wasted_formatted = (
+            f"{wasted_bytes / (1024 * 1024):.2f} MB" if wasted_bytes >= 1048576 else f"{wasted_bytes / 1024:.1f} KB"
+        )
+        msg = (
+            f"Found {len(duplicate_groups)} duplicate group(s) ({wasted_formatted} potentially reclaimable) in '{target_dir.name}'."
+            if duplicate_groups else f"No duplicate files found in '{target_dir.name}'."
+        )
+
+        return ToolResult.ok(
+            message=msg,
+            data={
+                "folder": str(target_dir),
+                "duplicate_groups": duplicate_groups,
+                "group_count": len(duplicate_groups),
+                "wasted_bytes": wasted_bytes,
+                "wasted_formatted": wasted_formatted,
+            },
+        )
+
     def open_path(self, target_path: Path) -> Dict[str, Any]:
         """Opens a specific resolved file or folder path directly."""
         if not target_path or not target_path.exists():
@@ -762,19 +1088,129 @@ class FileManager:
                 data={"path": str(target_path) if target_path else ""},
             )
 
-    def open_item(self, name: str) -> Dict[str, Any]:
+    def open_item(
+        self,
+        name: str,
+        app: Optional[str] = None,
+        app_manager=None,
+    ) -> Dict[str, Any]:
         """
-        Finds any file or folder and opens it with the default Windows application
-        or in File Explorer.
+        Finds any file or folder and opens it with the default Windows application,
+        with a specified application, or in File Explorer. Detects and reports ambiguous
+        matches cleanly.
         """
-        target_path = self.resolve_target(name)
+        clean_name = name.strip().strip("'\" ")
+        if not clean_name:
+            return ToolResult.fail(error="No item name specified to open.")
+
+        # 1. If explicit app provided and app_manager passed
+        if app and app_manager:
+            target_path = self.resolve_target(clean_name)
+            if target_path and target_path.exists():
+                return app_manager.open_application(app, path=target_path)
+            candidates = self.find_open_candidates(clean_name)
+            if len(candidates) > 1:
+                return ToolResult.fail(
+                    error=f"Multiple items found matching '{clean_name}'. Please specify exact path.",
+                    data={"candidates": [str(c) for c in candidates], "ambiguous": True},
+                )
+            elif len(candidates) == 1:
+                return app_manager.open_application(app, path=candidates[0])
+            else:
+                return ToolResult.fail(
+                    error=f"Item '{clean_name}' could not be found to open with '{app}'.",
+                    data={"name": clean_name, "app": app},
+                )
+
+        # 2. Check for ambiguous candidates across filesystem
+        candidates = self.find_open_candidates(clean_name)
+        if len(candidates) > 1:
+            # Check if there is an exact case-insensitive match on name
+            exact = [c for c in candidates if c.name.lower() == clean_name.lower()]
+            if len(exact) == 1:
+                return self.open_path(exact[0])
+            elif len(exact) > 1:
+                cand_paths = [str(c) for c in exact]
+                return ToolResult.fail(
+                    error=f"Multiple items found matching '{clean_name}'. Please specify which one to open.",
+                    data={"candidates": cand_paths, "ambiguous": True},
+                )
+            else:
+                cand_paths = [str(c) for c in candidates]
+                return ToolResult.fail(
+                    error=f"Multiple items found matching '{clean_name}'. Please specify which one to open.",
+                    data={"candidates": cand_paths, "ambiguous": True},
+                )
+        elif len(candidates) == 1:
+            return self.open_path(candidates[0])
+
+        # 3. Fallback to resolve_target
+        target_path = self.resolve_target(clean_name)
         if not target_path or not target_path.exists():
             return ToolResult.fail(
-                error=f"Item '{name}' could not be found to open.",
-                data={"name": name},
+                error=f"Item '{clean_name}' could not be found to open.",
+                data={"name": clean_name},
             )
 
         return self.open_path(target_path)
+
+    def find_advanced(
+        self,
+        query: Optional[str] = None,
+        kind: str = "any",
+        extension: Optional[Union[str, List[str]]] = None,
+        directory: Optional[Union[str, Path]] = None,
+        modified_within_days: Optional[float] = None,
+        min_size: Optional[int] = None,
+        max_size: Optional[int] = None,
+        limit: int = 50,
+        sort_by: str = "relevance",
+    ) -> List[Dict[str, Any]]:
+        """
+        Advanced search supporting query string, kind, extension categories/lists,
+        directory constraints, modification recency, file size, and relevance ranking.
+        """
+        is_dir = None
+        if kind.lower() in ("folder", "dir", "directory"):
+            is_dir = True
+        elif kind.lower() in ("file",):
+            is_dir = False
+
+        resolved_dir: Optional[Path] = None
+        if directory:
+            str_dir = str(directory).strip()
+            # Try to resolve target directory
+            target_p = self.resolve_target(str_dir, is_dir=True)
+            if target_p and target_p.is_dir():
+                resolved_dir = target_p
+                # Fast index the directory's immediate files to ensure freshness
+                try:
+                    for child in list(resolved_dir.iterdir())[:300]:
+                        if child.name.lower() not in EXCLUDED_DIR_NAMES:
+                            self.indexer.record_item(child)
+                except Exception:
+                    pass
+
+        # Search indexer
+        indexed_items = self.indexer.search_advanced(
+            query=query,
+            is_dir=is_dir,
+            extension=extension,
+            directory=resolved_dir or directory,
+            modified_within_days=modified_within_days,
+            min_size=min_size,
+            max_size=max_size,
+            limit=limit,
+            sort_by=sort_by,
+        )
+
+        results = [item.to_dict() for item in indexed_items]
+
+        # If zero results and query is provided and no complex filters, do priority roots check
+        if len(results) == 0 and query and not (extension or modified_within_days or min_size):
+            return self._fallback_priority_roots_search(query, is_dir=is_dir, limit=limit)
+
+        return results
 
     def find_items(
         self,
@@ -786,30 +1222,28 @@ class FileManager:
         Finds all files or folders matching the query present in File Explorer (all drives).
         kind can be 'any', 'file', or 'folder'.
         """
-        is_dir = None
-        if kind.lower() in ("folder", "dir", "directory"):
-            is_dir = True
-        elif kind.lower() in ("file",):
-            is_dir = False
+        return self.find_advanced(
+            query=query,
+            kind=kind,
+            limit=limit,
+            sort_by="relevance",
+        )
 
+    def _fallback_priority_roots_search(
+        self,
+        query: str,
+        is_dir: Optional[bool] = None,
+        limit: int = 25,
+    ) -> List[Dict[str, Any]]:
+        """Deep search across priority roots and available drives if index has no records."""
         query_clean = query.strip().lower()
         results: List[Dict[str, Any]] = []
         seen_paths = set()
 
-        # 1. Search SQLite index
-        indexed_matches = self.indexer.search(query=query_clean, is_dir=is_dir, limit=limit)
-        for item in indexed_matches:
-            p = Path(item.path)
-            if p.exists() and str(p) not in seen_paths:
-                seen_paths.add(str(p))
-                results.append(item.to_dict())
-
-        # 2. Priority roots search (depth 1..3)
         for root in PRIORITY_SEARCH_ROOTS:
             if not root.exists():
                 continue
             try:
-                # Direct check children
                 for child in root.iterdir():
                     if child.name.lower() in EXCLUDED_DIR_NAMES:
                         continue
@@ -833,7 +1267,6 @@ class FileManager:
                                 results.append(item_dict)
                                 self.indexer.record_item(child)
 
-                    # Subdirectory shallow check
                     if child.is_dir():
                         try:
                             for sub in child.iterdir():
@@ -864,24 +1297,19 @@ class FileManager:
             if len(results) >= limit:
                 break
 
-        # 3. Comprehensive drive scan across all drives if nothing found in index/priority roots
+        # Drive scan across available drives if still empty
         if len(results) == 0:
-            search_drives = list(AVAILABLE_DRIVES)
-            for drv in search_drives:
+            for drv in list(AVAILABLE_DRIVES):
                 if not drv.exists():
                     continue
                 try:
                     for root, dirs, files in os.walk(drv):
-                        # Prune system and heavy directories
                         dirs[:] = [
                             d for d in dirs
                             if d.lower() not in EXCLUDED_DIR_NAMES
                             and not any(exc in os.path.join(root, d).lower() for exc in EXCLUDED_DIR_NAMES)
                         ]
-
                         root_path = Path(root)
-
-                        # Limit depth from drive root for speed
                         try:
                             rel_parts = root_path.relative_to(drv).parts
                             if len(rel_parts) >= 4:
@@ -889,7 +1317,6 @@ class FileManager:
                         except ValueError:
                             pass
 
-                        # Match folders
                         if is_dir in (True, None):
                             for d in dirs:
                                 if query_clean in d.lower():
@@ -914,7 +1341,6 @@ class FileManager:
                                         except (PermissionError, OSError):
                                             continue
 
-                        # Match files
                         if is_dir in (False, None):
                             for f in files:
                                 if query_clean in f.lower():
@@ -943,11 +1369,9 @@ class FileManager:
                             break
                 except (PermissionError, OSError):
                     continue
-
                 if len(results) >= limit:
                     break
 
-        # Sort exact match first, then starts-with, then recent mtime
         results.sort(
             key=lambda x: (
                 0 if x["name"].lower() == query_clean else (1 if x["name"].lower().startswith(query_clean) else 2),

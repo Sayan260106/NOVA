@@ -15,6 +15,10 @@ NOVA_DATA_DIR.mkdir(parents=True, exist_ok=True)
 # Database path for indexed files, folders, and applications
 INDEX_DB_PATH = NOVA_DATA_DIR / "nova_index.db"
 
+# Database paths for Phase 3 persistent user memory and action audit logs
+MEMORY_DB_PATH = NOVA_DATA_DIR / "nova_memory.db"
+ACTION_HISTORY_DB_PATH = NOVA_DATA_DIR / "nova_history.db"
+
 # High-priority user directories for instant search and zero-path resolution
 USER_HOME = Path.home()
 USER_DESKTOP = USER_HOME / "Desktop"
