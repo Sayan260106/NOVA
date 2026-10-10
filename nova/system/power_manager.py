@@ -12,6 +12,8 @@ import subprocess
 from typing import Dict, Optional, Any
 import psutil
 
+from nova.core.results import ToolResult
+
 logger = logging.getLogger("nova.power_manager")
 
 
@@ -29,41 +31,35 @@ class PowerManager:
         """
         if dry_run:
             if self._user32 and hasattr(self._user32, "LockWorkStation"):
-                return {
-                    "success": True,
-                    "dry_run": True,
-                    "action": "lock",
-                    "message": "Validated LockWorkStation API (Dry run passed).",
-                }
-            return {
-                "success": False,
-                "dry_run": True,
-                "action": "lock",
-                "error": "user32.LockWorkStation not available.",
-            }
+                return ToolResult.ok(
+                    message="Validated LockWorkStation API (Dry run passed).",
+                    data={"dry_run": True, "action": "lock"},
+                )
+            return ToolResult.fail(
+                error="user32.LockWorkStation not available.",
+                message="user32.LockWorkStation not available.",
+                data={"dry_run": True, "action": "lock"},
+            )
 
         try:
             res = self._user32.LockWorkStation()
             if res != 0:
-                return {
-                    "success": True,
-                    "action": "lock",
-                    "message": "Laptop workstation locked successfully.",
-                }
+                return ToolResult.ok(
+                    message="Laptop workstation locked successfully.",
+                    data={"action": "lock"},
+                )
             else:
                 # Fallback to rundll32
                 subprocess.run(["rundll32.exe", "user32.dll,LockWorkStation"], check=True)
-                return {
-                    "success": True,
-                    "action": "lock",
-                    "message": "Laptop workstation locked via rundll32.",
-                }
+                return ToolResult.ok(
+                    message="Laptop workstation locked via rundll32.",
+                    data={"action": "lock"},
+                )
         except Exception as e:
-            return {
-                "success": False,
-                "action": "lock",
-                "error": f"Failed to lock workstation: {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to lock workstation: {str(e)}",
+                data={"action": "lock"},
+            )
 
     def sleep(self, dry_run: bool = False) -> Dict[str, Any]:
         """
@@ -72,42 +68,36 @@ class PowerManager:
         """
         if dry_run:
             if self._powrprof and hasattr(self._powrprof, "SetSuspendState"):
-                return {
-                    "success": True,
-                    "dry_run": True,
-                    "action": "sleep",
-                    "message": "Validated SetSuspendState API (Dry run passed).",
-                }
-            return {
-                "success": False,
-                "dry_run": True,
-                "action": "sleep",
-                "error": "powrprof.SetSuspendState not available.",
-            }
+                return ToolResult.ok(
+                    message="Validated SetSuspendState API (Dry run passed).",
+                    data={"dry_run": True, "action": "sleep"},
+                )
+            return ToolResult.fail(
+                error="powrprof.SetSuspendState not available.",
+                message="powrprof.SetSuspendState not available.",
+                data={"dry_run": True, "action": "sleep"},
+            )
 
         try:
             # SetSuspendState(bHibernate=False, bForce=False, bWakeupEventsDisabled=False)
             res = self._powrprof.SetSuspendState(0, 1, 0)
-            return {
-                "success": bool(res),
-                "action": "sleep",
-                "message": "Laptop placed into sleep mode.",
-            }
+            return ToolResult.ok(
+                message="Laptop placed into sleep mode.",
+                data={"action": "sleep", "result": bool(res)},
+            )
         except Exception as e:
             # Fallback to rundll32
             try:
                 subprocess.run(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], check=True)
-                return {
-                    "success": True,
-                    "action": "sleep",
-                    "message": "Laptop placed into sleep mode via rundll32.",
-                }
+                return ToolResult.ok(
+                    message="Laptop placed into sleep mode via rundll32.",
+                    data={"action": "sleep"},
+                )
             except Exception as e2:
-                return {
-                    "success": False,
-                    "action": "sleep",
-                    "error": f"Failed to put laptop to sleep: {str(e2)}",
-                }
+                return ToolResult.fail(
+                    error=f"Failed to put laptop to sleep: {str(e2)}",
+                    data={"action": "sleep"},
+                )
 
     def restart(
         self,
@@ -125,30 +115,31 @@ class PowerManager:
         cmd_str = " ".join(cmd)
 
         if dry_run:
-            return {
-                "success": True,
-                "dry_run": True,
-                "action": "restart",
-                "command": cmd_str,
-                "delay_seconds": delay_seconds,
-                "message": f"Restart command verified: '{cmd_str}' (Dry run mode - no system reboot triggered).",
-            }
+            return ToolResult.ok(
+                message=f"Restart command verified: '{cmd_str}' (Dry run mode - no system reboot triggered).",
+                data={
+                    "dry_run": True,
+                    "action": "restart",
+                    "command": cmd_str,
+                    "delay_seconds": delay_seconds,
+                },
+            )
 
         try:
             subprocess.run(cmd_str, shell=True, check=True)
-            return {
-                "success": True,
-                "action": "restart",
-                "command": cmd_str,
-                "delay_seconds": delay_seconds,
-                "message": f"System restart scheduled in {delay_seconds} seconds.",
-            }
+            return ToolResult.ok(
+                message=f"System restart scheduled in {delay_seconds} seconds.",
+                data={
+                    "action": "restart",
+                    "command": cmd_str,
+                    "delay_seconds": delay_seconds,
+                },
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "action": "restart",
-                "error": f"Failed to execute restart: {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to execute restart: {str(e)}",
+                data={"action": "restart", "command": cmd_str},
+            )
 
     def shutdown(
         self,
@@ -166,66 +157,75 @@ class PowerManager:
         cmd_str = " ".join(cmd)
 
         if dry_run:
-            return {
-                "success": True,
-                "dry_run": True,
-                "action": "shutdown",
-                "command": cmd_str,
-                "delay_seconds": delay_seconds,
-                "message": f"Shutdown command verified: '{cmd_str}' (Dry run mode - no system shutdown triggered).",
-            }
+            return ToolResult.ok(
+                message=f"Shutdown command verified: '{cmd_str}' (Dry run mode - no system shutdown triggered).",
+                data={
+                    "dry_run": True,
+                    "action": "shutdown",
+                    "command": cmd_str,
+                    "delay_seconds": delay_seconds,
+                },
+            )
 
         try:
             subprocess.run(cmd_str, shell=True, check=True)
-            return {
-                "success": True,
-                "action": "shutdown",
-                "command": cmd_str,
-                "delay_seconds": delay_seconds,
-                "message": f"System shutdown scheduled in {delay_seconds} seconds.",
-            }
+            return ToolResult.ok(
+                message=f"System shutdown scheduled in {delay_seconds} seconds.",
+                data={
+                    "action": "shutdown",
+                    "command": cmd_str,
+                    "delay_seconds": delay_seconds,
+                },
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "action": "shutdown",
-                "error": f"Failed to execute shutdown: {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to execute shutdown: {str(e)}",
+                data={"action": "shutdown", "command": cmd_str},
+            )
 
     def abort_shutdown(self, dry_run: bool = False) -> Dict[str, Any]:
         """Cancels a pending shutdown or restart."""
         cmd_str = "shutdown /a"
         if dry_run:
-            return {
-                "success": True,
-                "dry_run": True,
-                "action": "abort_shutdown",
-                "command": cmd_str,
-                "message": "Abort shutdown command verified (Dry run mode).",
-            }
+            return ToolResult.ok(
+                message="Abort shutdown command verified (Dry run mode).",
+                data={
+                    "dry_run": True,
+                    "action": "abort_shutdown",
+                    "command": cmd_str,
+                },
+            )
 
         try:
             res = subprocess.run(cmd_str, shell=True, capture_output=True, text=True)
-            return {
-                "success": res.returncode == 0,
-                "action": "abort_shutdown",
-                "command": cmd_str,
-                "message": "Any scheduled restart/shutdown has been canceled.",
-            }
+            if res.returncode == 0:
+                return ToolResult.ok(
+                    message="Any scheduled restart/shutdown has been canceled.",
+                    data={
+                        "action": "abort_shutdown",
+                        "command": cmd_str,
+                    },
+                )
+            else:
+                return ToolResult.fail(
+                    error=res.stderr or "Abort command failed.",
+                    data={"action": "abort_shutdown", "command": cmd_str},
+                )
         except Exception as e:
-            return {
-                "success": False,
-                "action": "abort_shutdown",
-                "error": f"Failed to abort shutdown: {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to abort shutdown: {str(e)}",
+                data={"action": "abort_shutdown"},
+            )
 
     def get_battery_status(self) -> Dict[str, Any]:
         """Returns battery and power source details."""
         battery = psutil.sensors_battery()
         if battery is None:
-            return {
-                "has_battery": False,
-                "message": "Desktop system or battery sensor not available.",
-            }
+            return ToolResult.fail(
+                error="Desktop system or battery sensor not available.",
+                message="Desktop system or battery sensor not available.",
+                data={"has_battery": False},
+            )
 
         percent = round(battery.percent, 1)
         plugged = battery.power_plugged
@@ -239,11 +239,14 @@ class PowerManager:
         elif plugged:
             time_str = "Charging / Plugged in"
 
-        return {
-            "has_battery": True,
-            "percent": percent,
-            "power_plugged": plugged,
-            "seconds_left": seconds_left,
-            "time_remaining": time_str,
-            "status": "Charging" if plugged else "On Battery",
-        }
+        return ToolResult.ok(
+            message=f"Battery is at {percent}% ({'Charging' if plugged else 'On Battery'}).",
+            data={
+                "has_battery": True,
+                "percent": percent,
+                "power_plugged": plugged,
+                "seconds_left": seconds_left,
+                "time_remaining": time_str,
+                "status": "Charging" if plugged else "On Battery",
+            },
+        )

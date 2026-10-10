@@ -17,6 +17,10 @@ from nova.system.app_manager import AppManager
 from nova.system.file_manager import FileManager
 from nova.system.power_manager import PowerManager
 from nova.agent.intent_parser import IntentParser, NovaIntent
+from nova.agent.planner import NovaPlanner, PlanStep, ExecutionPlan
+from nova.agent.policy import NovaPolicy, PolicyDecision
+from nova.agent.executor import NovaExecutor
+from nova.core.results import ToolResult
 
 logger = logging.getLogger("nova.brain")
 
@@ -88,6 +92,18 @@ class NovaBrain:
         self.history: List[Dict[str, Any]] = []
         self._last_context: Dict[str, Any] = {}
         self._initialized = False
+
+        # Phase 1: Planner, Policy, and Executor architecture
+        self.planner = NovaPlanner(intent_parser=self.intent_parser)
+        self.policy = NovaPolicy(strict_mode=True)
+        self.executor = NovaExecutor(
+            file_manager=self.file_manager,
+            app_manager=self.app_manager,
+            power_manager=self.power_manager,
+            ollama_client=self.ollama,
+            policy=self.policy,
+            dry_run_power=self.dry_run_power,
+        )
 
     def initialize(self) -> None:
         """Initialize all sub-modules, index applications, and check resources."""
@@ -161,8 +177,15 @@ class NovaBrain:
             }
 
     def execute_deletion(self, target_path: Any, permanent: bool = False) -> Dict[str, Any]:
-        """Executes deletion of a confirmed specific path."""
+        """Executes deletion of a confirmed specific path with safety validation."""
         p = Path(target_path) if isinstance(target_path, str) else target_path
+        is_prot, reason = self.policy.is_protected_path(p)
+        if is_prot:
+            return ToolResult.fail(
+                error=f"Cannot delete protected path: {reason}",
+                message=f"Policy Block: Cannot delete protected path: {reason}",
+                data={"path": str(p)},
+            )
         return self.file_manager.delete_path(p, permanent=permanent)
 
     def prepare_open(
@@ -384,174 +407,19 @@ class NovaBrain:
             }
 
     def execute_step(self, step: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Executes a single structured action step and updates local execution context."""
+        """Executes a single structured action step using the unified Planner and Executor."""
         intent = step.get("intent", "").upper()
-
-        if intent in ("CREATE_FOLDER", "NEW_FOLDER"):
-            name = step.get("name", "").strip().strip("'\" ")
-            parent = step.get("parent")
-            if context.get("last_folder"):
-                last_p = Path(context["last_folder"])
-                if parent and parent.strip().strip("'\" ").lower() == last_p.name.lower():
-                    parent = str(last_p)
-                elif parent:
-                    parent = parent.strip().strip("'\" ")
-            elif parent:
-                parent = parent.strip().strip("'\" ")
-            res = self.file_manager.create_folder(folder_name=name, parent_name=parent)
-            if res.get("success"):
-                context["last_folder"] = res.get("path", name)
-            return {
-                "intent": NovaIntent.CREATE_FOLDER,
-                "success": res.get("success", False),
-                "response": res.get("message", res.get("error", "Folder operation completed.")),
-                "details": res,
-            }
-
-        elif intent in ("CREATE_FILE", "NEW_FILE", "WRITE_FILE"):
-            name = step.get("name", "").strip().strip("'\" ")
-            content = step.get("content", "")
-            parent = step.get("parent")
-            # If parent is not explicitly provided, or matches the last created folder's name, use the exact path
-            if context.get("last_folder"):
-                last_p = Path(context["last_folder"])
-                if not parent:
-                    parent = str(last_p)
-                elif parent and parent.strip().strip("'\" ").lower() == last_p.name.lower():
-                    parent = str(last_p)
-                else:
-                    parent = parent.strip().strip("'\" ")
-            elif parent:
-                parent = parent.strip().strip("'\" ")
-
-            res = self.file_manager.create_file(file_name=name, content=content, parent_name=parent)
-            if res.get("success"):
-                context["last_file"] = name
-            return {
-                "intent": NovaIntent.CREATE_FILE,
-                "success": res.get("success", False),
-                "response": res.get("message", res.get("error", "File operation completed.")),
-                "details": res,
-            }
-
-        elif intent == "RENAME_ITEM":
-            old_name = step.get("old_name", step.get("old", ""))
-            new_name = step.get("new_name", step.get("new", ""))
-            is_dir = step.get("is_dir")
-            res = self.file_manager.rename_item(old_name=old_name, new_name=new_name, is_dir=is_dir)
-            return {
-                "intent": NovaIntent.RENAME_ITEM,
-                "success": res.get("success", False),
-                "response": res.get("message", res.get("error", "Rename operation completed.")),
-                "details": res,
-            }
-
-        elif intent == "DELETE_ITEM":
-            name = step.get("name", "")
-            is_dir = step.get("is_dir")
-            permanent = step.get("permanent", False)
-            res = self.file_manager.delete_item(name=name, is_dir=is_dir, permanent=permanent)
-            return {
-                "intent": NovaIntent.DELETE_ITEM,
-                "success": res.get("success", False),
-                "response": res.get("message", res.get("error", "Delete operation completed.")),
-                "details": res,
-            }
-
-        elif intent == "COPY_ITEM":
-            source = step.get("source", "")
-            dest = step.get("destination", "")
-            res = self.file_manager.copy_item(source_name=source, destination_folder_name=dest)
-            return {
-                "intent": NovaIntent.COPY_ITEM,
-                "success": res.get("success", False),
-                "response": res.get("message", res.get("error", "Copy operation completed.")),
-                "details": res,
-            }
-
-        elif intent == "MOVE_ITEM":
-            source = step.get("source", "")
-            dest = step.get("destination", "")
-            res = self.file_manager.move_item(source_name=source, destination_folder_name=dest)
-            return {
-                "intent": NovaIntent.MOVE_ITEM,
-                "success": res.get("success", False),
-                "response": res.get("message", res.get("error", "Move operation completed.")),
-                "details": res,
-            }
-
-        elif intent == "OPEN_APP":
-            app_name = step.get("name", "")
-            res = self.app_manager.open_application(app_name)
-            return {
-                "intent": NovaIntent.OPEN_APP,
-                "success": res.get("success", False),
-                "response": f"Opening {res.get('app_name', app_name)} now." if res.get("success") else f"Could not launch application '{app_name}'.",
-                "details": res,
-            }
-
-        elif intent == "OPEN_ITEM":
-            item_name = step.get("name", "")
-            res = self.file_manager.open_item(item_name)
-            return {
-                "intent": NovaIntent.OPEN_ITEM,
-                "success": res.get("success", False),
-                "response": res.get("message", f"Opened item '{item_name}'."),
-                "details": res,
-            }
-
-        elif intent == "FIND_ITEM":
-            query = step.get("query", "")
-            kind = step.get("kind", "any")
-            results = self.find_anything(query, kind=kind)
-            return {
-                "intent": NovaIntent.FIND_ITEM,
-                "success": True,
-                "response": f"Found {len(results)} matching item(s) for '{query}':",
-                "results": results,
-            }
-
-        elif intent == "SUMMARIZE":
-            target_type = step.get("target_type", "text")
-            target = step.get("target")
-            text = step.get("text")
-            parent = step.get("parent")
-            return self.summarize_content(target_type=target_type, target=target, text=text, parent=parent)
-
-        elif intent == "LOCK_SYSTEM":
-            res = self.power_manager.lock(dry_run=self.dry_run_power)
-            return {"intent": NovaIntent.LOCK_SYSTEM, "success": res["success"], "response": res.get("message", res.get("error"))}
-
-        elif intent == "SLEEP_SYSTEM":
-            res = self.power_manager.sleep(dry_run=self.dry_run_power)
-            return {"intent": NovaIntent.SLEEP_SYSTEM, "success": res["success"], "response": res.get("message", res.get("error"))}
-
-        elif intent == "RESTART_SYSTEM":
-            delay = step.get("delay", 0)
-            res = self.power_manager.restart(delay_seconds=delay, dry_run=self.dry_run_power)
-            return {"intent": NovaIntent.RESTART_SYSTEM, "success": res["success"], "response": res.get("message", res.get("error"))}
-
-        elif intent == "SHUTDOWN_SYSTEM":
-            delay = step.get("delay", 0)
-            res = self.power_manager.shutdown(delay_seconds=delay, dry_run=self.dry_run_power)
-            return {"intent": NovaIntent.SHUTDOWN_SYSTEM, "success": res["success"], "response": res.get("message", res.get("error"))}
-
-        elif intent == "ABORT_POWER":
-            res = self.power_manager.abort_shutdown(dry_run=self.dry_run_power)
-            return {"intent": NovaIntent.ABORT_POWER, "success": res["success"], "response": res.get("message", res.get("error"))}
-
-        elif intent == "BATTERY_STATUS":
-            res = self.power_manager.get_battery_status()
-            msg = f"Battery is at {res.get('percent', 0)}% ({res.get('status', 'Unknown')})."
-            return {"intent": NovaIntent.BATTERY_STATUS, "success": True, "response": msg, "details": res}
-
-        elif intent == "LANGUAGE_CHART":
-            lines = ["JARVIS Component Architecture & Recommended Languages:"]
-            for comp, lang in LANGUAGE_CHART.items():
-                lines.append(f" • {comp:<32}: {lang}")
-            return {"intent": NovaIntent.LANGUAGE_CHART, "success": True, "response": "\n".join(lines), "chart": LANGUAGE_CHART}
-
-        return {"intent": NovaIntent.UNKNOWN, "success": False, "response": f"Unsupported action: {intent}"}
+        step_obj, err = self.planner._create_step(1, intent, step, str(step))
+        if err or not step_obj:
+            return ToolResult.fail(error=err or "Invalid step", message=f"Unsupported action: {intent}")
+        plan = ExecutionPlan(raw_utterance=str(step), intent=intent, steps=[step_obj])
+        res = self.executor.execute_plan(plan, context=context)
+        if res.success:
+            if intent in ("CREATE_FOLDER", "NEW_FOLDER"):
+                context["last_folder"] = res.get("path", step.get("name"))
+            elif intent in ("CREATE_FILE", "NEW_FILE", "WRITE_FILE"):
+                context["last_file"] = step.get("name")
+        return res
 
     def process_complex_command(
         self,
@@ -559,7 +427,7 @@ class NovaBrain:
         sub_commands: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Processes a complex, multi-step, or compound command.
+        Processes a complex, multi-step, or compound command using Planner and Executor.
         Uses Ollama decomposition if available, with robust deterministic compound engine fallback.
         """
         # Try Ollama decomposition first if available
@@ -567,244 +435,134 @@ class NovaBrain:
             llm_steps = self.ollama.parse_complex_command(utterance, context=self._last_context)
             if llm_steps and len(llm_steps) > 0:
                 logger.info(f"Ollama decomposed command into {len(llm_steps)} step(s).")
-                step_results = []
-                all_success = True
-                step_context = dict(self._last_context)
+                step_objs = []
+                for idx, s in enumerate(llm_steps, 1):
+                    s_intent = s.get("intent", "").upper()
+                    st, err = self.planner._create_step(idx, s_intent, s, str(s))
+                    if st:
+                        step_objs.append(st)
+                if step_objs:
+                    plan = ExecutionPlan(
+                        raw_utterance=utterance,
+                        intent=NovaIntent.COMPLEX_COMMAND,
+                        steps=step_objs,
+                        metadata={"source": "ollama"},
+                    )
+                    exec_ctx = dict(self._last_context)
+                    exec_ctx["history"] = self.history
+                    res = self.executor.execute_plan(plan, context=exec_ctx)
+                    self._last_context.update(exec_ctx)
+                    self._record_history(utterance, res)
+                    return res
 
-                for step in llm_steps:
-                    res = self.execute_step(step, step_context)
-                    step_results.append(res)
-                    if not res.get("success", False):
-                        all_success = False
-
-                self._last_context.update(step_context)
-                responses = [r.get("response", "Done.") for r in step_results]
-                return {
-                    "intent": NovaIntent.COMPLEX_COMMAND,
-                    "success": all_success,
-                    "response": "\n".join(responses),
-                    "steps": step_results,
-                    "source": "ollama",
-                }
-
-        # Fallback to rule-based compound engine
-        commands = sub_commands or self.intent_parser.split_compound(utterance)
-        step_results = []
-        all_success = True
-        step_context = dict(self._last_context)
-
-        for cmd in commands:
-            parsed = self.intent_parser.parse_single(cmd)
-            # Context propagation: if CREATE_FILE has no parent and a folder was just created, inherit it
-            if parsed.get("intent") == NovaIntent.CREATE_FILE and not parsed.get("parent") and step_context.get("last_folder"):
-                parsed["parent"] = step_context["last_folder"]
-
-            res = self.execute_step(parsed, step_context)
-            step_results.append(res)
-            if not res.get("success", False):
-                all_success = False
-
-        self._last_context.update(step_context)
-        responses = [r.get("response", "Done.") for r in step_results]
-        return {
+        # Deterministic Planner & Executor fallback
+        parsed = {
             "intent": NovaIntent.COMPLEX_COMMAND,
-            "success": all_success,
-            "response": "\n".join(responses),
-            "steps": step_results,
-            "source": "compound_engine",
+            "raw": utterance,
+            "sub_commands": sub_commands or self.intent_parser.split_compound(utterance),
         }
+        plan = self.planner.build_plan(utterance, parsed_intent=parsed, context=self._last_context)
+        exec_ctx = dict(self._last_context)
+        exec_ctx["history"] = self.history
+        res = self.executor.execute_plan(plan, context=exec_ctx)
+        self._last_context.update(exec_ctx)
+        self._record_history(utterance, res)
+        return res
+
+    def _get_help_text(self) -> str:
+        """Returns the complete Nova command manual."""
+        return (
+            "==========================================================================\n"
+            "               NOVA VIRTUAL ASSISTANT - COMMAND REFERENCE\n"
+            "==========================================================================\n\n"
+            "[APPLICATION MANAGEMENT]\n"
+            " • open <app>                   Launch any installed app (e.g. 'open chrome', 'start notepad')\n"
+            " • launch / run <app>           Synonyms for launch (e.g. 'launch calculator', 'run terminal')\n"
+            " • open app <name>              Explicit app targeting (e.g. 'open app spotify')\n\n"
+            "[ZERO-PATH FILE & FOLDER INTELLIGENCE]\n"
+            " • create folder <name>         Create in D: drive default (e.g. 'create folder Projects')\n"
+            " • create folder <name> in <p>  Create in specific folder (e.g. 'create folder Notes inside Projects')\n"
+            " • create file <name>           Create empty file in D: (e.g. 'create file todo.txt')\n"
+            " • create file <name> with...   Create with text (e.g. 'create file notes.txt with content 'Hi'')\n"
+            " • create file ... inside <p>   Create in specific folder (e.g. 'create file log.txt inside Logs')\n"
+            " • rename file/folder <a> to <b> Rename anywhere on PC (e.g. 'rename file draft.txt to final.txt')\n"
+            " • copy file/folder <a> to <dest> Auto-resolves destination (e.g. 'copy file report.pdf to Backup')\n"
+            " • move file/folder <a> to <dest> Auto-resolves destination (e.g. 'move file data.csv to Archive')\n"
+            " • delete file/folder <name>    Safe delete to Recycle Bin (e.g. 'delete file temp.log')\n"
+            " • delete ... permanently       Permanent deletion (e.g. 'delete folder Cache permanently')\n"
+            " * Disambiguation & Confirmation: If duplicate names exist across drives, Nova asks you\n"
+            "   to select the exact path [1-N] and confirms before deleting.\n\n"
+            "[UNIVERSAL OPEN (APPS, FILES & FOLDERS)]\n"
+            " • open <name>                  Discovers and opens matching app, file, or folder\n"
+            " • open file / open folder <n>  Explicit type filtering (e.g. 'open file budget.xlsx')\n"
+            " * Disambiguation: If multiple items match, Nova displays choices and confirms before opening.\n\n"
+            "[UNIVERSAL SEARCH & DISCOVERY]\n"
+            " • find app <name>              Search installed applications (e.g. 'find app spotify')\n"
+            " • find file <name>             Search files across all drives (e.g. 'find file budget.xlsx')\n"
+            " • find folder <name>           Search directories across drives (e.g. 'find folder Documents')\n"
+            " • find / search <query>        Search everything across all logical drives\n\n"
+            "[COMPLEX & COMPOUND COMMANDS]\n"
+            " • Multi-step chaining          Connect actions with 'and', 'then', 'and then', or ';'\n"
+            "   Examples:\n"
+            "   - 'Make a folder Demo in Project folder and create a file xyz.txt'\n"
+            "   - 'Create folder TestSuite in D: drive and create file results.txt with content 'Passed' inside TestSuite'\n"
+            "   - 'create folder Vault then create file keys.txt inside Vault'\n\n"
+            "[SUMMARIZATION (100% Local & Offline - Zero API Keys)]\n"
+            " • summarize this text: <text>  Summarize direct text via local Ollama or offline fallback\n"
+            " • summarize file <filename>    Extract & summarize contents of any document or file\n"
+            " • summarize context            Summarize conversational and session action history\n\n"
+            "[SYSTEM POWER & SESSION CONTROL]\n"
+            " • lock laptop                  Lock Windows workstation screen\n"
+            " • sleep laptop                 Put system into standby / sleep\n"
+            " • restart laptop [in X sec]    Restart system with optional countdown timer\n"
+            " • shutdown laptop [in X sec]   Power off system with optional countdown timer\n"
+            " • cancel shutdown              Abort scheduled shutdown or restart\n"
+            " • battery status               Display battery percentage, status, and remaining time\n\n"
+            "[ARCHITECTURE & TECH STACK]\n"
+            " • show language chart          Display 24-component JARVIS language architecture chart\n\n"
+            "[SESSION CONTROL]\n"
+            " • help                         Display this command reference manual\n"
+            " • exit / quit                  Shut down Nova session"
+        )
+
+    def _record_history(self, utterance: str, result: Dict[str, Any]) -> None:
+        """Records processed interaction in session history."""
+        self.history.append({
+            "user": utterance,
+            "response": result.get("response", ""),
+            "intent": result.get("intent", ""),
+            "success": result.get("success", False),
+        })
 
     def process(self, utterance: str) -> Dict[str, Any]:
         """
-        Processes a natural language command or user input and executes the appropriate action.
+        Processes a natural language command or user input through the Planner,
+        Policy, and Executor pipeline.
         """
         if not self._initialized:
             self.initialize()
 
-        parsed = self.intent_parser.parse(utterance)
+        raw_clean = utterance.strip()
+        parsed = self.intent_parser.parse(raw_clean)
         intent = parsed.get("intent", NovaIntent.UNKNOWN)
-        result: Dict[str, Any] = {}
 
         # 0. Complex / Compound Command
         if intent == NovaIntent.COMPLEX_COMMAND:
-            result = self.process_complex_command(utterance, sub_commands=parsed.get("sub_commands"))
+            return self.process_complex_command(utterance, sub_commands=parsed.get("sub_commands"))
 
-        # 1. Summarization
-        elif intent == NovaIntent.SUMMARIZE:
-            result = self.summarize_content(
-                target_type=parsed.get("target_type", "text"),
-                target=parsed.get("target"),
-                text=parsed.get("text"),
-                parent=parsed.get("parent"),
-            )
+        # 1. Help
+        if intent == NovaIntent.HELP or raw_clean.lower() == "help":
+            help_text = self._get_help_text()
+            result = {
+                "intent": NovaIntent.HELP,
+                "success": True,
+                "response": help_text,
+            }
+            self._record_history(utterance, result)
+            return result
 
-        # 2. Open Application
-        elif intent == NovaIntent.OPEN_APP:
-            app_name = parsed["name"]
-            res = self.app_manager.open_application(app_name)
-            if not res["success"]:
-                # Fallback: check if it's a file or folder the user wanted to open
-                file_res = self.file_manager.open_item(app_name)
-                if file_res["success"]:
-                    result = {
-                        "intent": NovaIntent.OPEN_ITEM,
-                        "success": True,
-                        "response": f"Opened {file_res['type']} '{file_res['name']}'.",
-                        "details": file_res,
-                    }
-                else:
-                    result = {
-                        "intent": NovaIntent.OPEN_APP,
-                        "success": False,
-                        "response": f"Could not find or launch application '{app_name}'.",
-                        "details": res,
-                    }
-            else:
-                self._last_context["last_app"] = app_name
-                result = {
-                    "intent": NovaIntent.OPEN_APP,
-                    "success": True,
-                    "response": f"Opening {res.get('app_name', app_name)} now.",
-                    "details": res,
-                }
-
-        # 3. Create Folder
-        elif intent == NovaIntent.CREATE_FOLDER:
-            res = self.file_manager.create_folder(
-                folder_name=parsed["name"],
-                parent_name=parsed.get("parent"),
-            )
-            if res["success"]:
-                self._last_context["last_folder"] = res.get("path", parsed["name"])
-                result = {
-                    "intent": NovaIntent.CREATE_FOLDER,
-                    "success": True,
-                    "response": res["message"],
-                    "details": res,
-                }
-            else:
-                result = {
-                    "intent": NovaIntent.CREATE_FOLDER,
-                    "success": False,
-                    "response": f"Error: {res.get('error')}",
-                    "details": res,
-                }
-
-        # 4. Create File
-        elif intent == NovaIntent.CREATE_FILE:
-            parent = parsed.get("parent")
-            if not parent and self._last_context.get("last_folder"):
-                # If creating file right after creating or referencing a folder without explicit parent
-                pass
-            res = self.file_manager.create_file(
-                file_name=parsed["name"],
-                content=parsed.get("content", ""),
-                parent_name=parent,
-            )
-            if res["success"]:
-                self._last_context["last_file"] = parsed["name"]
-                result = {
-                    "intent": NovaIntent.CREATE_FILE,
-                    "success": True,
-                    "response": res["message"],
-                    "details": res,
-                }
-            else:
-                result = {
-                    "intent": NovaIntent.CREATE_FILE,
-                    "success": False,
-                    "response": f"Error: {res.get('error')}",
-                    "details": res,
-                }
-
-        # 5. Rename Item
-        elif intent == NovaIntent.RENAME_ITEM:
-            res = self.file_manager.rename_item(
-                old_name=parsed["old_name"],
-                new_name=parsed["new_name"],
-                is_dir=parsed.get("is_dir"),
-            )
-            if res["success"]:
-                result = {
-                    "intent": NovaIntent.RENAME_ITEM,
-                    "success": True,
-                    "response": res["message"],
-                    "details": res,
-                }
-            else:
-                result = {
-                    "intent": NovaIntent.RENAME_ITEM,
-                    "success": False,
-                    "response": f"Error: {res.get('error')}",
-                    "details": res,
-                }
-
-        # 6. Copy Item
-        elif intent == NovaIntent.COPY_ITEM:
-            res = self.file_manager.copy_item(
-                source_name=parsed["source"],
-                destination_folder_name=parsed["destination"],
-            )
-            if res["success"]:
-                result = {
-                    "intent": NovaIntent.COPY_ITEM,
-                    "success": True,
-                    "response": res["message"],
-                    "details": res,
-                }
-            else:
-                result = {
-                    "intent": NovaIntent.COPY_ITEM,
-                    "success": False,
-                    "response": f"Error: {res.get('error')}",
-                    "details": res,
-                }
-
-        # 7. Move Item
-        elif intent == NovaIntent.MOVE_ITEM:
-            res = self.file_manager.move_item(
-                source_name=parsed["source"],
-                destination_folder_name=parsed["destination"],
-            )
-            if res["success"]:
-                result = {
-                    "intent": NovaIntent.MOVE_ITEM,
-                    "success": True,
-                    "response": res["message"],
-                    "details": res,
-                }
-            else:
-                result = {
-                    "intent": NovaIntent.MOVE_ITEM,
-                    "success": False,
-                    "response": f"Error: {res.get('error')}",
-                    "details": res,
-                }
-
-        # 8. Delete Item
-        elif intent == NovaIntent.DELETE_ITEM:
-            res = self.file_manager.delete_item(
-                name=parsed["name"],
-                is_dir=parsed.get("is_dir"),
-                permanent=parsed.get("permanent", False),
-            )
-            if res["success"]:
-                result = {
-                    "intent": NovaIntent.DELETE_ITEM,
-                    "success": True,
-                    "response": res["message"],
-                    "details": res,
-                }
-            else:
-                result = {
-                    "intent": NovaIntent.DELETE_ITEM,
-                    "success": False,
-                    "response": f"Error: {res.get('error')}",
-                    "details": res,
-                }
-
-        # 9. Open File or Folder
-        elif intent == NovaIntent.OPEN_ITEM:
+        # 2. Open Item disambiguation (if multiple matches exist across filesystem)
+        if intent == NovaIntent.OPEN_ITEM:
             item_name = parsed["name"]
             kind = parsed.get("kind")
             prep = self.prepare_open(item_name, kind=kind)
@@ -817,6 +575,8 @@ class NovaBrain:
                     "response": f"Multiple items found matching '{item_name}'. Please specify which one to open.",
                     "details": prep,
                 }
+                self._record_history(utterance, result)
+                return result
             elif prep["status"] == "single":
                 res = self.execute_open(prep["target"])
                 result = {
@@ -825,217 +585,36 @@ class NovaBrain:
                     "response": res.get("message", f"Opened {prep['target'].kind} '{prep['target'].name}'."),
                     "details": res,
                 }
-            else:
-                # Fallback direct resolution
-                res = self.file_manager.open_item(item_name)
-                if res["success"]:
-                    result = {
-                        "intent": NovaIntent.OPEN_ITEM,
-                        "success": True,
-                        "response": res["message"],
-                        "details": res,
-                    }
-                else:
-                    app_res = self.app_manager.open_application(item_name)
-                    if app_res["success"]:
-                        result = {
-                            "intent": NovaIntent.OPEN_APP,
-                            "success": True,
-                            "response": f"Opening application '{app_res.get('app_name', item_name)}'.",
-                            "details": app_res,
-                        }
-                    else:
-                        result = {
-                            "intent": NovaIntent.OPEN_ITEM,
-                            "success": False,
-                            "response": f"Error: {res.get('error')}",
-                            "details": res,
-                        }
+                self._record_history(utterance, result)
+                return result
 
-        # 10. Find Item
-        elif intent == NovaIntent.FIND_ITEM:
-            query = parsed["query"]
-            kind = parsed.get("kind", "any")
-            results = self.find_anything(query, kind=kind)
-            count = len(results)
-            if count == 0:
-                result = {
-                    "intent": NovaIntent.FIND_ITEM,
-                    "success": True,
-                    "response": f"No matches found for '{query}'.",
-                    "results": [],
-                }
-            else:
-                result = {
-                    "intent": NovaIntent.FIND_ITEM,
-                    "success": True,
-                    "response": f"Found {count} matching item(s) for '{query}':",
-                    "results": results,
-                }
-
-        # 11. Power Controls
-        elif intent == NovaIntent.LOCK_SYSTEM:
-            res = self.power_manager.lock(dry_run=self.dry_run_power)
+        # 3. Unknown intent
+        if intent == NovaIntent.UNKNOWN:
             result = {
-                "intent": NovaIntent.LOCK_SYSTEM,
-                "success": res["success"],
-                "response": res["message"] if res["success"] else res.get("error"),
-                "details": res,
+                "intent": NovaIntent.UNKNOWN,
+                "success": False,
+                "response": "I didn't quite catch that. Try saying 'open <app>', 'create folder <name>', 'summarize <text/file>', or 'help'.",
+                "raw": utterance,
             }
+            self._record_history(utterance, result)
+            return result
 
-        elif intent == NovaIntent.SLEEP_SYSTEM:
-            res = self.power_manager.sleep(dry_run=self.dry_run_power)
-            result = {
-                "intent": NovaIntent.SLEEP_SYSTEM,
-                "success": res["success"],
-                "response": res["message"] if res["success"] else res.get("error"),
-                "details": res,
-            }
+        # 4. Standard Plan & Execute Pipeline
+        plan = self.planner.build_plan(utterance, parsed_intent=parsed, context=self._last_context)
+        exec_ctx = dict(self._last_context)
+        exec_ctx["history"] = self.history
+        result = self.executor.execute_plan(plan, context=exec_ctx)
 
-        elif intent == NovaIntent.RESTART_SYSTEM:
-            delay = parsed.get("delay", 0)
-            res = self.power_manager.restart(delay_seconds=delay, dry_run=self.dry_run_power)
-            result = {
-                "intent": NovaIntent.RESTART_SYSTEM,
-                "success": res["success"],
-                "response": res["message"] if res["success"] else res.get("error"),
-                "details": res,
-            }
+        # Context updates
+        if result.success:
+            if intent == NovaIntent.CREATE_FOLDER:
+                self._last_context["last_folder"] = result.get("path")
+            elif intent == NovaIntent.CREATE_FILE:
+                self._last_context["last_file"] = parsed.get("name")
+            elif intent == NovaIntent.OPEN_APP:
+                self._last_context["last_app"] = parsed.get("name")
 
-        elif intent == NovaIntent.SHUTDOWN_SYSTEM:
-            delay = parsed.get("delay", 0)
-            res = self.power_manager.shutdown(delay_seconds=delay, dry_run=self.dry_run_power)
-            result = {
-                "intent": NovaIntent.SHUTDOWN_SYSTEM,
-                "success": res["success"],
-                "response": res["message"] if res["success"] else res.get("error"),
-                "details": res,
-            }
-
-        elif intent == NovaIntent.ABORT_POWER:
-            res = self.power_manager.abort_shutdown(dry_run=self.dry_run_power)
-            result = {
-                "intent": NovaIntent.ABORT_POWER,
-                "success": res["success"],
-                "response": res["message"],
-                "details": res,
-            }
-
-        elif intent == NovaIntent.BATTERY_STATUS:
-            res = self.power_manager.get_battery_status()
-            if res.get("has_battery"):
-                msg = f"Battery is at {res['percent']}% ({res['status']}). Remaining time: {res['time_remaining']}."
-            else:
-                msg = res.get("message", "Battery details unavailable.")
-            result = {
-                "intent": NovaIntent.BATTERY_STATUS,
-                "success": True,
-                "response": msg,
-                "details": res,
-            }
-
-        # 12. Language Chart
-        elif intent == NovaIntent.LANGUAGE_CHART:
-            lines = ["JARVIS Component Architecture & Recommended Languages:"]
-            for comp, lang in LANGUAGE_CHART.items():
-                lines.append(f" • {comp:<32}: {lang}")
-            result = {
-                "intent": NovaIntent.LANGUAGE_CHART,
-                "success": True,
-                "response": "\n".join(lines),
-                "chart": LANGUAGE_CHART,
-            }
-
-        # 13. Help
-        elif intent == NovaIntent.HELP:
-            help_text = (
-                "==========================================================================\n"
-                "               NOVA VIRTUAL ASSISTANT - COMMAND REFERENCE\n"
-                "==========================================================================\n\n"
-                "[APPLICATION MANAGEMENT]\n"
-                " • open <app>                   Launch any installed app (e.g. 'open chrome', 'start notepad')\n"
-                " • launch / run <app>           Synonyms for launch (e.g. 'launch calculator', 'run terminal')\n"
-                " • open app <name>              Explicit app targeting (e.g. 'open app spotify')\n\n"
-                "[ZERO-PATH FILE & FOLDER INTELLIGENCE]\n"
-                " • create folder <name>         Create in D: drive default (e.g. 'create folder Projects')\n"
-                " • create folder <name> in <p>  Create in specific folder (e.g. 'create folder Notes inside Projects')\n"
-                " • create file <name>           Create empty file in D: (e.g. 'create file todo.txt')\n"
-                " • create file <name> with...   Create with text (e.g. 'create file notes.txt with content 'Hi'')\n"
-                " • create file ... inside <p>   Create in specific folder (e.g. 'create file log.txt inside Logs')\n"
-                " • rename file/folder <a> to <b> Rename anywhere on PC (e.g. 'rename file draft.txt to final.txt')\n"
-                " • copy file/folder <a> to <dest> Auto-resolves destination (e.g. 'copy file report.pdf to Backup')\n"
-                " • move file/folder <a> to <dest> Auto-resolves destination (e.g. 'move file data.csv to Archive')\n"
-                " • delete file/folder <name>    Safe delete to Recycle Bin (e.g. 'delete file temp.log')\n"
-                " • delete ... permanently       Permanent deletion (e.g. 'delete folder Cache permanently')\n"
-                " * Disambiguation & Confirmation: If duplicate names exist across drives, Nova asks you\n"
-                "   to select the exact path [1-N] and confirms before deleting.\n\n"
-                "[UNIVERSAL OPEN (APPS, FILES & FOLDERS)]\n"
-                " • open <name>                  Discovers and opens matching app, file, or folder\n"
-                " • open file / open folder <n>  Explicit type filtering (e.g. 'open file budget.xlsx')\n"
-                " * Disambiguation: If multiple items match, Nova displays choices and confirms before opening.\n\n"
-                "[UNIVERSAL SEARCH & DISCOVERY]\n"
-                " • find app <name>              Search installed applications (e.g. 'find app spotify')\n"
-                " • find file <name>             Search files across all drives (e.g. 'find file budget.xlsx')\n"
-                " • find folder <name>           Search directories across drives (e.g. 'find folder Documents')\n"
-                " • find / search <query>        Search everything across all logical drives\n\n"
-                "[COMPLEX & COMPOUND COMMANDS]\n"
-                " • Multi-step chaining          Connect actions with 'and', 'then', 'and then', or ';'\n"
-                "   Examples:\n"
-                "   - 'Make a folder Demo in Project folder and create a file xyz.txt'\n"
-                "   - 'Create folder TestSuite in D: drive and create file results.txt with content 'Passed' inside TestSuite'\n"
-                "   - 'create folder Vault then create file keys.txt inside Vault'\n\n"
-                "[SUMMARIZATION (100% Local & Offline - Zero API Keys)]\n"
-                " • summarize this text: <text>  Summarize direct text via local Ollama or offline fallback\n"
-                " • summarize file <filename>    Extract & summarize contents of any document or file\n"
-                " • summarize context            Summarize conversational and session action history\n\n"
-                "[SYSTEM POWER & SESSION CONTROL]\n"
-                " • lock laptop                  Lock Windows workstation screen\n"
-                " • sleep laptop                 Put system into standby / sleep\n"
-                " • restart laptop [in X sec]    Restart system with optional countdown timer\n"
-                " • shutdown laptop [in X sec]   Power off system with optional countdown timer\n"
-                " • cancel shutdown              Abort scheduled shutdown or restart\n"
-                " • battery status               Display battery percentage, status, and remaining time\n\n"
-                "[ARCHITECTURE & TECH STACK]\n"
-                " • show language chart          Display 24-component JARVIS language architecture chart\n\n"
-                "[SESSION CONTROL]\n"
-                " • help                         Display this command reference manual\n"
-                " • exit / quit                  Shut down Nova session"
-            )
-            result = {
-                "intent": NovaIntent.HELP,
-                "success": True,
-                "response": help_text,
-            }
-
-        # 14. Unknown -> Try Ollama Complex Decomposition before giving up
-        else:
-            if self.ollama.is_available():
-                complex_res = self.process_complex_command(utterance)
-                if complex_res.get("steps") and len(complex_res["steps"]) > 0:
-                    result = complex_res
-                else:
-                    result = {
-                        "intent": NovaIntent.UNKNOWN,
-                        "success": False,
-                        "response": f"I didn't quite catch that. Try saying 'open <app>', 'create folder <name>', 'summarize <text/file>', or 'help'.",
-                        "raw": utterance,
-                    }
-            else:
-                result = {
-                    "intent": NovaIntent.UNKNOWN,
-                    "success": False,
-                    "response": f"I didn't quite catch that. Try saying 'open <app>', 'create folder <name>', 'summarize <text/file>', or 'help'.",
-                    "raw": utterance,
-                }
-
-        # Store in rolling history buffer
-        self.history.append({
-            "user": utterance,
-            "response": result.get("response", ""),
-            "intent": result.get("intent", intent),
-            "success": result.get("success", False),
-        })
-
+        self._record_history(utterance, result)
         return result
 
     def find_anything(self, query: str, kind: str = "any") -> List[Dict[str, Any]]:

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 from nova.config import START_MENU_SYSTEM, START_MENU_USER
+from nova.core.results import ToolResult
 
 logger = logging.getLogger("nova.app_manager")
 
@@ -287,11 +288,10 @@ class AppManager:
 
         matches = self.find_applications(query, limit=5)
         if not matches or matches[0][1] < 0.65:
-            return {
-                "success": False,
-                "app_name": query,
-                "error": f"Application '{query}' not found.",
-            }
+            return ToolResult.fail(
+                error=f"Application '{query}' not found.",
+                data={"app_name": query},
+            )
 
         best_app, score = matches[0]
 
@@ -309,14 +309,15 @@ class AppManager:
                     creationflags=detach_flag,
                 )
                 self._spawned_processes.append(proc)
-                return {
-                    "success": True,
-                    "app_name": best_app.name,
-                    "target": target,
-                    "source": best_app.source,
-                    "confidence": score,
-                    "message": f"Launched '{best_app.name}' (AppID: {best_app.app_id})",
-                }
+                return ToolResult.ok(
+                    message=f"Launched '{best_app.name}' (AppID: {best_app.app_id})",
+                    data={
+                        "app_name": best_app.name,
+                        "target": target,
+                        "source": best_app.source,
+                        "confidence": score,
+                    },
+                )
 
             elif best_app.path:
                 target = best_app.path
@@ -335,28 +336,29 @@ class AppManager:
                         creationflags=detach_flag,
                     )
                     self._spawned_processes.append(proc)
-                return {
-                    "success": True,
-                    "app_name": best_app.name,
-                    "target": target,
-                    "source": best_app.source,
-                    "confidence": score,
-                    "message": f"Launched '{best_app.name}' from {target}",
-                }
+                return ToolResult.ok(
+                    message=f"Launched '{best_app.name}' from {target}",
+                    data={
+                        "app_name": best_app.name,
+                        "target": target,
+                        "source": best_app.source,
+                        "confidence": score,
+                    },
+                )
             else:
                 # Direct startfile
                 os.startfile(best_app.name)
-                return {
-                    "success": True,
-                    "app_name": best_app.name,
-                    "target": best_app.name,
-                    "confidence": score,
-                    "message": f"Launched '{best_app.name}'",
-                }
+                return ToolResult.ok(
+                    message=f"Launched '{best_app.name}'",
+                    data={
+                        "app_name": best_app.name,
+                        "target": best_app.name,
+                        "confidence": score,
+                    },
+                )
 
         except Exception as e:
-            return {
-                "success": False,
-                "app_name": best_app.name,
-                "error": f"Failed to launch '{best_app.name}': {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to launch '{best_app.name}': {str(e)}",
+                data={"app_name": best_app.name},
+            )

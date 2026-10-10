@@ -21,6 +21,7 @@ from nova.config import (
     AVAILABLE_DRIVES,
 )
 from nova.core.indexer import Indexer, FileItem
+from nova.core.results import ToolResult
 
 logger = logging.getLogger("nova.file_manager")
 
@@ -51,7 +52,7 @@ class FileManager:
         lower_name = target_name.lower()
 
         # 1. Check if drive letter or drive name requested (e.g. "d:", "d drive", "d:\", "d:/")
-        drive_match = re.match(r"^([a-zA-Z]):?(?:\s*drive)?(?:[\\/].*)?$", target_name, re.IGNORECASE)
+        drive_match = re.match(r"^([a-zA-Z]):?(?:\s*drive)?(?:[\\/])?$", target_name, re.IGNORECASE)
         if drive_match and len(target_name.split()) <= 2:
             letter = drive_match.group(1).upper()
             drive_candidate = Path(f"{letter}:/")
@@ -370,28 +371,36 @@ class FileManager:
                         target_parent = auto_parent
                         resolved_parent_msg = f"'{auto_parent.name}' at {auto_parent}"
                     except Exception:
-                        return {
-                            "success": False,
-                            "error": f"Parent folder '{parent_name}' could not be located or created.",
-                        }
+                        return ToolResult.fail(
+                            error=f"Parent folder '{parent_name}' could not be located or created.",
+                            data={"folder_name": folder_name, "parent_name": parent_name},
+                        )
 
         clean_folder_name = folder_name.strip().strip("'\" ")
         new_folder_path = target_parent / clean_folder_name
         try:
             new_folder_path.mkdir(parents=True, exist_ok=True)
             self.indexer.record_item(new_folder_path)
-            return {
-                "success": True,
-                "folder_name": new_folder_path.name,
-                "path": str(new_folder_path.resolve()),
-                "parent": str(target_parent.resolve()),
-                "message": f"Folder '{new_folder_path.name}' created inside {resolved_parent_msg}.",
-            }
+            str_path = str(new_folder_path.resolve())
+            return ToolResult.ok(
+                message=f"Folder '{new_folder_path.name}' created inside {resolved_parent_msg}.",
+                data={
+                    "folder_name": new_folder_path.name,
+                    "path": str_path,
+                    "parent": str(target_parent.resolve()),
+                },
+                undo_info={
+                    "action": "delete",
+                    "path": str_path,
+                    "type": "folder",
+                    "permanent": False,
+                },
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Failed to create folder '{folder_name}': {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to create folder '{folder_name}': {str(e)}",
+                data={"folder_name": folder_name, "parent": str(target_parent.resolve())},
+            )
 
     def create_file(
         self,
@@ -430,29 +439,37 @@ class FileManager:
                         target_parent = auto_parent
                         resolved_parent_msg = f"'{auto_parent.name}' at {auto_parent}"
                     except Exception:
-                        return {
-                            "success": False,
-                            "error": f"Parent folder '{parent_name}' could not be located.",
-                        }
+                        return ToolResult.fail(
+                            error=f"Parent folder '{parent_name}' could not be located.",
+                            data={"file_name": file_name, "parent_name": parent_name},
+                        )
 
         clean_file_name = file_name.strip().strip("'\" ")
         new_file_path = target_parent / clean_file_name
         try:
             new_file_path.write_text(content, encoding="utf-8")
             self.indexer.record_item(new_file_path)
-            return {
-                "success": True,
-                "file_name": new_file_path.name,
-                "path": str(new_file_path.resolve()),
-                "parent": str(target_parent.resolve()),
-                "size": len(content.encode("utf-8")),
-                "message": f"File '{new_file_path.name}' created inside {resolved_parent_msg}.",
-            }
+            str_path = str(new_file_path.resolve())
+            return ToolResult.ok(
+                message=f"File '{new_file_path.name}' created inside {resolved_parent_msg}.",
+                data={
+                    "file_name": new_file_path.name,
+                    "path": str_path,
+                    "parent": str(target_parent.resolve()),
+                    "size": len(content.encode("utf-8")),
+                },
+                undo_info={
+                    "action": "delete",
+                    "path": str_path,
+                    "type": "file",
+                    "permanent": False,
+                },
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Failed to create file '{file_name}': {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to create file '{file_name}': {str(e)}",
+                data={"file_name": file_name, "parent": str(target_parent.resolve())},
+            )
 
     def read_file(
         self,
@@ -467,29 +484,31 @@ class FileManager:
         clean_parent = re.sub(r"\s+(folder|directory|dir)$", "", parent_name.strip(), flags=re.IGNORECASE).strip("'\" ") if parent_name else None
         target_path = self.resolve_target(clean_name, is_dir=False, parent_name=clean_parent)
         if not target_path or not target_path.exists() or target_path.is_dir():
-            return {
-                "success": False,
-                "error": f"File '{clean_name}' could not be located to read.",
-            }
+            return ToolResult.fail(
+                error=f"File '{clean_name}' could not be located to read.",
+                data={"file_name": clean_name},
+            )
 
         try:
             content = target_path.read_text(encoding="utf-8", errors="replace")
             is_truncated = len(content) > max_chars
             if is_truncated:
                 content = content[:max_chars]
-            return {
-                "success": True,
-                "file_name": target_path.name,
-                "path": str(target_path.resolve()),
-                "content": content,
-                "size": target_path.stat().st_size,
-                "truncated": is_truncated,
-            }
+            return ToolResult.ok(
+                message=f"Read {len(content)} characters from '{target_path.name}'.",
+                data={
+                    "file_name": target_path.name,
+                    "path": str(target_path.resolve()),
+                    "content": content,
+                    "size": target_path.stat().st_size,
+                    "truncated": is_truncated,
+                },
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Failed to read file '{target_path.name}': {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to read file '{target_path.name}': {str(e)}",
+                data={"file_name": target_path.name},
+            )
 
     def rename_item(
         self,
@@ -502,40 +521,49 @@ class FileManager:
         """
         target_path = self.resolve_target(old_name, is_dir=is_dir)
         if not target_path or not target_path.exists():
-            return {
-                "success": False,
-                "error": f"Item '{old_name}' could not be located to rename.",
-            }
+            return ToolResult.fail(
+                error=f"Item '{old_name}' could not be located to rename.",
+                data={"old_name": old_name, "new_name": new_name},
+            )
 
         clean_new_name = new_name.strip()
         new_path = target_path.parent / clean_new_name
         item_type = "folder" if target_path.is_dir() else "file"
 
         if new_path.exists() and new_path != target_path:
-            return {
-                "success": False,
-                "error": f"Cannot rename: An item named '{clean_new_name}' already exists in {target_path.parent}.",
-            }
+            return ToolResult.fail(
+                error=f"Cannot rename: An item named '{clean_new_name}' already exists in {target_path.parent}.",
+                data={"old_name": old_name, "new_name": new_name, "existing_path": str(new_path)},
+            )
 
         try:
             target_path.rename(new_path)
             self.indexer.remove_item(target_path)
             self.indexer.record_item(new_path)
 
-            return {
-                "success": True,
-                "old_name": target_path.name,
-                "new_name": new_path.name,
-                "old_path": str(target_path.resolve()),
-                "new_path": str(new_path.resolve()),
-                "type": item_type,
-                "message": f"Successfully renamed {item_type} '{target_path.name}' to '{new_path.name}' in {target_path.parent}.",
-            }
+            old_str = str(target_path.resolve())
+            new_str = str(new_path.resolve())
+            return ToolResult.ok(
+                message=f"Successfully renamed {item_type} '{target_path.name}' to '{new_path.name}' in {target_path.parent}.",
+                data={
+                    "old_name": target_path.name,
+                    "new_name": new_path.name,
+                    "old_path": old_str,
+                    "new_path": new_str,
+                    "type": item_type,
+                },
+                undo_info={
+                    "action": "rename",
+                    "old_path": new_str,
+                    "new_path": old_str,
+                    "type": item_type,
+                },
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Failed to rename {item_type} '{old_name}' to '{new_name}': {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to rename {item_type} '{old_name}' to '{new_name}': {str(e)}",
+                data={"old_name": old_name, "new_name": new_name},
+            )
 
     def delete_path(
         self,
@@ -544,10 +572,10 @@ class FileManager:
     ) -> Dict[str, Any]:
         """Deletes a specific resolved file or directory path directly."""
         if not target_path or not target_path.exists():
-            return {
-                "success": False,
-                "error": f"Item at '{target_path}' does not exist.",
-            }
+            return ToolResult.fail(
+                error=f"Item at '{target_path}' does not exist.",
+                data={"path": str(target_path) if target_path else ""},
+            )
 
         item_type = "folder" if target_path.is_dir() else "file"
         str_path = str(target_path.resolve())
@@ -565,19 +593,25 @@ class FileManager:
 
             self.indexer.remove_item(target_path)
             action = "permanently deleted" if permanent else "moved to Recycle Bin"
-            return {
-                "success": True,
-                "name": target_path.name,
-                "path": str_path,
-                "type": item_type,
-                "recycled": recycled,
-                "message": f"Successfully {action} {item_type} '{target_path.name}'.",
-            }
+            undo_info = (
+                {"action": "restore_recycle_bin", "path": str_path, "type": item_type, "recycled": True}
+                if recycled else None
+            )
+            return ToolResult.ok(
+                message=f"Successfully {action} {item_type} '{target_path.name}'.",
+                data={
+                    "name": target_path.name,
+                    "path": str_path,
+                    "type": item_type,
+                    "recycled": recycled,
+                },
+                undo_info=undo_info,
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Failed to delete {item_type} at '{str_path}': {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to delete {item_type} at '{str_path}': {str(e)}",
+                data={"path": str_path, "type": item_type},
+            )
 
     def delete_item(
         self,
@@ -591,10 +625,10 @@ class FileManager:
         """
         target_path = self.resolve_target(name, is_dir=is_dir)
         if not target_path or not target_path.exists():
-            return {
-                "success": False,
-                "error": f"Item '{name}' could not be found to delete.",
-            }
+            return ToolResult.fail(
+                error=f"Item '{name}' could not be found to delete.",
+                data={"name": name},
+            )
 
         return self.delete_path(target_path, permanent=permanent)
 
@@ -609,17 +643,17 @@ class FileManager:
         """
         source_path = self.resolve_target(source_name)
         if not source_path or not source_path.exists():
-            return {
-                "success": False,
-                "error": f"Source item '{source_name}' could not be found.",
-            }
+            return ToolResult.fail(
+                error=f"Source item '{source_name}' could not be found.",
+                data={"source_name": source_name},
+            )
 
         dest_dir = self.resolve_target(destination_folder_name, is_dir=True)
         if not dest_dir or not dest_dir.is_dir():
-            return {
-                "success": False,
-                "error": f"Destination folder '{destination_folder_name}' could not be found.",
-            }
+            return ToolResult.fail(
+                error=f"Destination folder '{destination_folder_name}' could not be found.",
+                data={"destination_folder_name": destination_folder_name},
+            )
 
         dest_path = dest_dir / source_path.name
 
@@ -632,18 +666,26 @@ class FileManager:
                 shutil.copy2(source_path, dest_path)
 
             self.indexer.record_item(dest_path)
-            return {
-                "success": True,
-                "name": source_path.name,
-                "source": str(source_path.resolve()),
-                "destination": str(dest_path.resolve()),
-                "message": f"Copied '{source_path.name}' to '{dest_dir.name}' ({dest_dir}).",
-            }
+            dest_str = str(dest_path.resolve())
+            return ToolResult.ok(
+                message=f"Copied '{source_path.name}' to '{dest_dir.name}' ({dest_dir}).",
+                data={
+                    "name": source_path.name,
+                    "source": str(source_path.resolve()),
+                    "destination": dest_str,
+                },
+                undo_info={
+                    "action": "delete",
+                    "path": dest_str,
+                    "type": "folder" if source_path.is_dir() else "file",
+                    "permanent": False,
+                },
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Failed to copy '{source_name}': {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to copy '{source_name}': {str(e)}",
+                data={"source_name": source_name, "destination": destination_folder_name},
+            )
 
     def move_item(
         self,
@@ -656,60 +698,69 @@ class FileManager:
         """
         source_path = self.resolve_target(source_name)
         if not source_path or not source_path.exists():
-            return {
-                "success": False,
-                "error": f"Source item '{source_name}' could not be found.",
-            }
+            return ToolResult.fail(
+                error=f"Source item '{source_name}' could not be found.",
+                data={"source_name": source_name},
+            )
 
         dest_dir = self.resolve_target(destination_folder_name, is_dir=True)
         if not dest_dir or not dest_dir.is_dir():
-            return {
-                "success": False,
-                "error": f"Destination folder '{destination_folder_name}' could not be found.",
-            }
+            return ToolResult.fail(
+                error=f"Destination folder '{destination_folder_name}' could not be found.",
+                data={"destination_folder_name": destination_folder_name},
+            )
 
         dest_path = dest_dir / source_path.name
+        source_parent_str = str(source_path.parent.resolve())
 
         try:
             shutil.move(str(source_path), str(dest_path))
             self.indexer.remove_item(source_path)
             self.indexer.record_item(dest_path)
-            return {
-                "success": True,
-                "name": dest_path.name,
-                "source": str(source_path),
-                "destination": str(dest_path.resolve()),
-                "message": f"Moved '{dest_path.name}' to '{dest_dir.name}' ({dest_dir}).",
-            }
+            dest_str = str(dest_path.resolve())
+            return ToolResult.ok(
+                message=f"Moved '{dest_path.name}' to '{dest_dir.name}' ({dest_dir}).",
+                data={
+                    "name": dest_path.name,
+                    "source": str(source_path),
+                    "destination": dest_str,
+                },
+                undo_info={
+                    "action": "move",
+                    "source": dest_str,
+                    "destination": source_parent_str,
+                },
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Failed to move '{source_name}': {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to move '{source_name}': {str(e)}",
+                data={"source_name": source_name, "destination": destination_folder_name},
+            )
 
     def open_path(self, target_path: Path) -> Dict[str, Any]:
         """Opens a specific resolved file or folder path directly."""
         if not target_path or not target_path.exists():
-            return {
-                "success": False,
-                "error": f"Item at '{target_path}' does not exist.",
-            }
+            return ToolResult.fail(
+                error=f"Item at '{target_path}' does not exist.",
+                data={"path": str(target_path) if target_path else ""},
+            )
 
         try:
             os.startfile(str(target_path.resolve()))
             item_type = "folder" if target_path.is_dir() else "file"
-            return {
-                "success": True,
-                "name": target_path.name,
-                "path": str(target_path.resolve()),
-                "type": item_type,
-                "message": f"Opened {item_type} '{target_path.name}'.",
-            }
+            return ToolResult.ok(
+                message=f"Opened {item_type} '{target_path.name}'.",
+                data={
+                    "name": target_path.name,
+                    "path": str(target_path.resolve()),
+                    "type": item_type,
+                },
+            )
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Failed to open '{target_path}': {str(e)}",
-            }
+            return ToolResult.fail(
+                error=f"Failed to open '{target_path}': {str(e)}",
+                data={"path": str(target_path) if target_path else ""},
+            )
 
     def open_item(self, name: str) -> Dict[str, Any]:
         """
@@ -718,10 +769,10 @@ class FileManager:
         """
         target_path = self.resolve_target(name)
         if not target_path or not target_path.exists():
-            return {
-                "success": False,
-                "error": f"Item '{name}' could not be found to open.",
-            }
+            return ToolResult.fail(
+                error=f"Item '{name}' could not be found to open.",
+                data={"name": name},
+            )
 
         return self.open_path(target_path)
 
