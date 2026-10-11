@@ -108,6 +108,26 @@ class NovaPolicy:
         NovaIntent.FORGET,
         NovaIntent.ACTION_HISTORY,
         NovaIntent.UNDO,
+        # Phase 4 Productivity Intents
+        NovaIntent.SAVE_NOTE,
+        NovaIntent.LIST_NOTES,
+        NovaIntent.SEARCH_NOTES,
+        NovaIntent.GET_NOTE,
+        NovaIntent.UPDATE_NOTE,
+        NovaIntent.DELETE_NOTE,
+        NovaIntent.SET_REMINDER,
+        NovaIntent.LIST_REMINDERS,
+        NovaIntent.COMPLETE_REMINDER,
+        NovaIntent.DISMISS_REMINDER,
+        NovaIntent.CLEAR_REMINDERS,
+        NovaIntent.GET_CLIPBOARD,
+        NovaIntent.SET_CLIPBOARD,
+        NovaIntent.CLEAR_CLIPBOARD,
+        NovaIntent.SAVE_CLIPBOARD_NOTE,
+        NovaIntent.SYSTEM_DIAGNOSTICS,
+        NovaIntent.SCHEDULE_TASK,
+        NovaIntent.LIST_SCHEDULES,
+        NovaIntent.CANCEL_SCHEDULE,
         NovaIntent.COMPLEX_COMMAND,
     }
 
@@ -306,6 +326,16 @@ class NovaPolicy:
             is_prot, reason = self.is_protected_path(folder)
             if is_prot:
                 return PolicyDecision.block(f"Cannot organize protected path: {reason}")
+            return PolicyDecision.permit()
+
+        # 8. Scheduled Task Safety
+        elif intent == NovaIntent.SCHEDULE_TASK:
+            tgt_intent = step.parameters.get("target_intent", "")
+            if tgt_intent in (NovaIntent.DELETE_ITEM, NovaIntent.SHUTDOWN_SYSTEM, NovaIntent.RESTART_SYSTEM):
+                return PolicyDecision.block(
+                    f"Scheduled automation cannot execute destructive action '{tgt_intent}'.",
+                    risk_level="critical",
+                )
             return PolicyDecision.permit()
 
         return PolicyDecision.permit()

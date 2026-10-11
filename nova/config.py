@@ -19,6 +19,11 @@ INDEX_DB_PATH = NOVA_DATA_DIR / "nova_index.db"
 MEMORY_DB_PATH = NOVA_DATA_DIR / "nova_memory.db"
 ACTION_HISTORY_DB_PATH = NOVA_DATA_DIR / "nova_history.db"
 
+# Database paths for Phase 4 productivity tools (notes, reminders, schedules)
+NOTES_DB_PATH = NOVA_DATA_DIR / "nova_notes.db"
+REMINDERS_DB_PATH = NOVA_DATA_DIR / "nova_reminders.db"
+SCHEDULES_DB_PATH = NOVA_DATA_DIR / "nova_schedules.db"
+
 # High-priority user directories for instant search and zero-path resolution
 USER_HOME = Path.home()
 USER_DESKTOP = USER_HOME / "Desktop"

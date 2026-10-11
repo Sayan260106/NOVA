@@ -23,6 +23,11 @@ from nova.agent.planner import NovaPlanner, PlanStep, ExecutionPlan
 from nova.agent.policy import NovaPolicy, PolicyDecision
 from nova.agent.executor import NovaExecutor
 from nova.core.results import ToolResult
+from nova.tools.notes import NotesManager
+from nova.tools.reminders import ReminderManager
+from nova.tools.clipboard import ClipboardManager
+from nova.tools.system_diagnostics import SystemDiagnostics
+from nova.tools.scheduler import TaskScheduler
 
 logger = logging.getLogger("nova.brain")
 
@@ -93,11 +98,18 @@ class NovaBrain:
         self.power_manager = PowerManager()
         self.intent_parser = IntentParser()
         self.ollama = OllamaClient()
+
+        # Phase 4 Productivity Managers
+        self.notes_manager = NotesManager()
+        self.reminder_manager = ReminderManager()
+        self.clipboard_manager = ClipboardManager()
+        self.diagnostics_manager = SystemDiagnostics(power_manager=self.power_manager)
+
         self.history: List[Dict[str, Any]] = []
         self._last_context: Dict[str, Any] = {}
         self._initialized = False
 
-        # Phase 1, 2, 3: Planner, Policy, Executor with Memory & Action History
+        # Phase 1, 2, 3 & 4: Planner, Policy, Executor with Memory, History & Productivity Tools
         self.planner = NovaPlanner(intent_parser=self.intent_parser, memory=self.memory)
         self.policy = NovaPolicy(strict_mode=True)
         self.executor = NovaExecutor(
@@ -109,7 +121,13 @@ class NovaBrain:
             dry_run_power=self.dry_run_power,
             memory=self.memory,
             action_history=self.action_history,
+            notes_manager=self.notes_manager,
+            reminder_manager=self.reminder_manager,
+            clipboard_manager=self.clipboard_manager,
+            diagnostics_manager=self.diagnostics_manager,
         )
+        self.scheduler = TaskScheduler(executor=self.executor, action_history=self.action_history)
+        self.executor._scheduler = self.scheduler
 
     def initialize(self) -> None:
         """Initialize all sub-modules, index applications, and check resources."""
@@ -121,8 +139,19 @@ class NovaBrain:
         threading.Thread(target=self._check_ollama, daemon=True).start()
         # Start background indexing of high-priority locations
         threading.Thread(target=self._background_index, daemon=True).start()
+        # Start Phase 4 reminder and task scheduler monitors
+        self.reminder_manager.start_background_checker()
+        self.scheduler.start()
         self._initialized = True
         logger.info("Nova Assistant online and ready.")
+
+    def shutdown(self) -> None:
+        """Stops background threads and releases resources."""
+        try:
+            self.reminder_manager.stop_background_checker()
+            self.scheduler.stop()
+        except Exception as e:
+            logger.debug(f"Shutdown notice: {e}")
 
     def _check_ollama(self) -> None:
         """Proactively checks local Ollama availability."""
@@ -545,6 +574,31 @@ class NovaBrain:
             "[UNDO & RECOVERY]\n"
             " • undo / undo the last action / undo last move Safely restores previous reversible state\n"
             " * Pre-flight safety: Validates source existence and avoids destination collisions before rollback.\n\n"
+            "[QUICK NOTES & SCRATCHPAD]\n"
+            " • save note <content>          Save quick note across restarts (e.g. 'save note revise OS')\n"
+            " • list notes                   Display all saved scratchpad notes\n"
+            " • search notes for <query>     Keyword search across notes\n"
+            " • read / get note <id>         View full contents of a note\n"
+            " • update note <id> with <text> Edit or append to note\n"
+            " • delete note <id>             Delete note (reversible via undo)\n\n"
+            "[REMINDERS & TASK TRACKING]\n"
+            " • remind me at <time> to <act> Set time-based reminder (e.g. 'remind me at 8 PM to revise OS')\n"
+            " • remind me in <duration> to.. Relative reminder (e.g. 'remind me in 15 minutes to take break')\n"
+            " • list reminders               Show pending reminders\n"
+            " • complete reminder <id>       Mark reminder finished\n"
+            " • dismiss reminder <id>        Dismiss active alert\n\n"
+            "[CLIPBOARD UTILITIES]\n"
+            " • read clipboard               Inspect current clipboard with privacy checks\n"
+            " • copy <text> to clipboard     Set system clipboard content\n"
+            " • clear clipboard              Securely wipe sensitive clipboard data\n"
+            " • save clipboard as note       Convert current clipboard text into a persistent note\n\n"
+            "[SYSTEM DIAGNOSTICS & HEALTH]\n"
+            " • check why PC is running slow Intelligent bottleneck diagnostics without killing processes\n"
+            " • system diagnostics           Complete CPU, RAM, disk, and top process overview\n\n"
+            "[SCHEDULED TASKS & AUTOMATION]\n"
+            " • every day at <time>, <action> Schedule approved action (e.g. 'Every day at 9 AM, open my college project')\n"
+            " • list scheduled tasks         Display recurring persistent task schedules\n"
+            " • cancel schedule <id>         Remove scheduled automation\n\n"
             "[SUMMARIZATION (100% Local & Offline - Zero API Keys)]\n"
             " • summarize this text: <text>  Summarize direct text via local Ollama or offline fallback\n"
             " • summarize file <filename>    Extract & summarize contents of any document or file\n"

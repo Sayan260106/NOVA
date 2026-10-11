@@ -35,6 +35,11 @@ class NovaExecutor:
         dry_run_power: bool = True,
         memory: Optional[Any] = None,
         action_history: Optional[Any] = None,
+        notes_manager: Optional[Any] = None,
+        reminder_manager: Optional[Any] = None,
+        clipboard_manager: Optional[Any] = None,
+        diagnostics_manager: Optional[Any] = None,
+        scheduler: Optional[Any] = None,
     ):
         self.file_manager = file_manager
         self.app_manager = app_manager
@@ -44,7 +49,50 @@ class NovaExecutor:
         self.dry_run_power = dry_run_power
         self.memory = memory
         self.action_history = action_history
+
+        # Phase 4 productivity managers (lazy initialized if not supplied)
+        self._notes_manager = notes_manager
+        self._reminder_manager = reminder_manager
+        self._clipboard_manager = clipboard_manager
+        self._diagnostics_manager = diagnostics_manager
+        self._scheduler = scheduler
+
         self.undo_stack: List[Dict[str, Any]] = []
+
+    @property
+    def notes_manager(self):
+        if self._notes_manager is None:
+            from nova.tools.notes import NotesManager
+            self._notes_manager = NotesManager()
+        return self._notes_manager
+
+    @property
+    def reminder_manager(self):
+        if self._reminder_manager is None:
+            from nova.tools.reminders import ReminderManager
+            self._reminder_manager = ReminderManager()
+        return self._reminder_manager
+
+    @property
+    def clipboard_manager(self):
+        if self._clipboard_manager is None:
+            from nova.tools.clipboard import ClipboardManager
+            self._clipboard_manager = ClipboardManager()
+        return self._clipboard_manager
+
+    @property
+    def diagnostics_manager(self):
+        if self._diagnostics_manager is None:
+            from nova.tools.system_diagnostics import SystemDiagnostics
+            self._diagnostics_manager = SystemDiagnostics(power_manager=self.power_manager)
+        return self._diagnostics_manager
+
+    @property
+    def scheduler(self):
+        if self._scheduler is None:
+            from nova.tools.scheduler import TaskScheduler
+            self._scheduler = TaskScheduler(executor=self, action_history=self.action_history)
+        return self._scheduler
 
     def execute_plan(
         self,
@@ -655,6 +703,117 @@ class NovaExecutor:
                         message=f"Failed to undo '{record['command']}': {rollback_res.error}",
                         data={"record": record},
                     )
+
+            # Phase 4: Quick Notes
+            elif intent == NovaIntent.SAVE_NOTE:
+                return self.notes_manager.add_note(
+                    content=params["content"],
+                    title=params.get("title"),
+                    tags=params.get("tags"),
+                )
+
+            elif intent == NovaIntent.LIST_NOTES:
+                return self.notes_manager.list_notes(
+                    limit=params.get("limit", 20),
+                    tag=params.get("tag"),
+                )
+
+            elif intent == NovaIntent.SEARCH_NOTES:
+                return self.notes_manager.search_notes(
+                    query=params.get("query", ""),
+                )
+
+            elif intent == NovaIntent.GET_NOTE:
+                return self.notes_manager.get_note(
+                    note_id=params["note_id"],
+                )
+
+            elif intent == NovaIntent.UPDATE_NOTE:
+                return self.notes_manager.update_note(
+                    note_id=params["note_id"],
+                    content=params.get("content"),
+                    title=params.get("title"),
+                    tags=params.get("tags"),
+                    append=params.get("append", False),
+                )
+
+            elif intent == NovaIntent.DELETE_NOTE:
+                return self.notes_manager.delete_note(
+                    note_id=params["note_id"],
+                )
+
+            # Phase 4: Reminders
+            elif intent == NovaIntent.SET_REMINDER:
+                return self.reminder_manager.add_reminder(
+                    message=params["message"],
+                    due_time=params["due_time"],
+                    recurrence=params.get("recurrence"),
+                )
+
+            elif intent == NovaIntent.LIST_REMINDERS:
+                return self.reminder_manager.list_reminders()
+
+            elif intent == NovaIntent.COMPLETE_REMINDER:
+                return self.reminder_manager.complete_reminder(
+                    reminder_id=params["id"],
+                )
+
+            elif intent == NovaIntent.DISMISS_REMINDER:
+                return self.reminder_manager.dismiss_reminder(
+                    reminder_id=params["id"],
+                )
+
+            elif intent == NovaIntent.CLEAR_REMINDERS:
+                return self.reminder_manager.clear_completed()
+
+            # Phase 4: Clipboard Utilities
+            elif intent == NovaIntent.GET_CLIPBOARD:
+                return self.clipboard_manager.get_clipboard_text(
+                    allow_sensitive=params.get("allow_sensitive", False),
+                )
+
+            elif intent == NovaIntent.SET_CLIPBOARD:
+                return self.clipboard_manager.set_clipboard_text(
+                    text=params.get("text", ""),
+                )
+
+            elif intent == NovaIntent.CLEAR_CLIPBOARD:
+                return self.clipboard_manager.clear_clipboard()
+
+            elif intent == NovaIntent.SAVE_CLIPBOARD_NOTE:
+                return self.clipboard_manager.save_clipboard_as_note(
+                    notes_manager=self.notes_manager,
+                    title=params.get("title"),
+                    tags=params.get("tags"),
+                )
+
+            # Phase 4: System Diagnostics
+            elif intent == NovaIntent.SYSTEM_DIAGNOSTICS:
+                action_type = params.get("action", "full_diagnostics")
+                if action_type == "diagnose_performance":
+                    return self.diagnostics_manager.diagnose_performance()
+                else:
+                    return self.diagnostics_manager.run_full_diagnostics()
+
+            # Phase 4: Scheduled Tasks
+            elif intent == NovaIntent.SCHEDULE_TASK:
+                return self.scheduler.schedule_task(
+                    name=params.get("name", "Scheduled Task"),
+                    intent=params["target_intent"],
+                    parameters=params.get("target_params", {}),
+                    schedule_type=params.get("schedule_type", "daily_at"),
+                    time_of_day=params.get("time_of_day"),
+                    interval_seconds=params.get("interval_seconds"),
+                    target_time=params.get("target_time"),
+                )
+
+            elif intent == NovaIntent.LIST_SCHEDULES:
+                return self.scheduler.list_schedules()
+
+            elif intent == NovaIntent.CANCEL_SCHEDULE:
+                return self.scheduler.cancel_schedule(
+                    schedule_id=params["id"],
+                )
 
             return ToolResult.fail(error=f"Unsupported action for intent '{intent}'.")
 

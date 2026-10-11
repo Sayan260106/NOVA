@@ -38,6 +38,26 @@ class NovaIntent:
     FORGET = "FORGET"
     ACTION_HISTORY = "ACTION_HISTORY"
     UNDO = "UNDO"
+    # Phase 4 Productivity Tools
+    SAVE_NOTE = "SAVE_NOTE"
+    LIST_NOTES = "LIST_NOTES"
+    SEARCH_NOTES = "SEARCH_NOTES"
+    GET_NOTE = "GET_NOTE"
+    UPDATE_NOTE = "UPDATE_NOTE"
+    DELETE_NOTE = "DELETE_NOTE"
+    SET_REMINDER = "SET_REMINDER"
+    LIST_REMINDERS = "LIST_REMINDERS"
+    COMPLETE_REMINDER = "COMPLETE_REMINDER"
+    DISMISS_REMINDER = "DISMISS_REMINDER"
+    CLEAR_REMINDERS = "CLEAR_REMINDERS"
+    GET_CLIPBOARD = "GET_CLIPBOARD"
+    SET_CLIPBOARD = "SET_CLIPBOARD"
+    CLEAR_CLIPBOARD = "CLEAR_CLIPBOARD"
+    SAVE_CLIPBOARD_NOTE = "SAVE_CLIPBOARD_NOTE"
+    SYSTEM_DIAGNOSTICS = "SYSTEM_DIAGNOSTICS"
+    SCHEDULE_TASK = "SCHEDULE_TASK"
+    LIST_SCHEDULES = "LIST_SCHEDULES"
+    CANCEL_SCHEDULE = "CANCEL_SCHEDULE"
     COMPLEX_COMMAND = "COMPLEX_COMMAND"
     UNKNOWN = "UNKNOWN"
 
@@ -68,7 +88,7 @@ class IntentParser:
             return [p.strip() for p in explicit_split if p.strip()]
 
         # Action verbs
-        action_verbs = r"(?:create|make|new|write|open|launch|start|run|delete|remove|rename|copy|move|find|search|locate|list|summarize|lock|sleep|restart|shutdown|organize|detect|preview)"
+        action_verbs = r"(?:create|make|new|write|open|launch|start|run|delete|remove|rename|copy|move|find|search|locate|list|summarize|lock|sleep|restart|shutdown|organize|detect|preview|note|save|remind|schedule|diagnose|clipboard)"
 
         # Split on ', and ' or ' and ' if parts look like commands (contain action verbs)
         and_parts = re.split(r",?\s+and\s+", cleaned, flags=re.IGNORECASE)
@@ -299,6 +319,213 @@ class IntentParser:
             return {
                 "intent": NovaIntent.FORGET,
                 "key": m_forget.group(1).strip().strip("'\" "),
+            }
+
+        # =========================================================================
+        # 3g. Phase 4: Daily Productivity Tools
+        # =========================================================================
+
+        # --- Clipboard Utilities ---
+        if re.match(r"^(?:please\s+)?save\s+(?:the\s+)?(?:current\s+)?clipboard(?:\s+text|\s+content)?\s+as\s+(?:a\s+)?note(?:\s+(?:titled|called)\s+['\"]?([\w\s\.-]+?)['\"]?)?$", cleaned, re.IGNORECASE):
+            m_clip_note = re.match(r"^.*?note(?:\s+(?:titled|called)\s+['\"]?([\w\s\.-]+?)['\"]?)?$", cleaned, re.IGNORECASE)
+            title = m_clip_note.group(1).strip() if (m_clip_note and m_clip_note.group(1)) else None
+            return {"intent": NovaIntent.SAVE_CLIPBOARD_NOTE, "title": title}
+
+        if re.match(r"^(?:please\s+)?(?:clear|empty|wipe)\s+(?:the\s+)?clipboard$", cleaned, re.IGNORECASE):
+            return {"intent": NovaIntent.CLEAR_CLIPBOARD}
+
+        m_copy_clip = re.match(
+            r"^(?:please\s+)?(?:copy\s+(?:text\s+)?['\"](.+?)['\"]\s+to\s+(?:the\s+)?clipboard|copy\s+to\s+(?:the\s+)?clipboard:?\s+(.+)|set\s+clipboard\s+(?:to\s+)?['\"]?(.+?)['\"]?)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_copy_clip:
+            text_to_copy = m_copy_clip.group(1) or m_copy_clip.group(2) or m_copy_clip.group(3) or ""
+            return {"intent": NovaIntent.SET_CLIPBOARD, "text": text_to_copy.strip()}
+
+        if re.match(r"^(?:please\s+)?(?:read|get|show|check|view)\s+(?:the\s+)?clipboard$|^what(?:'s|\s+is)\s+in\s+(?:the\s+|my\s+)?clipboard$", cleaned, re.IGNORECASE):
+            return {"intent": NovaIntent.GET_CLIPBOARD}
+
+        # --- System Diagnostics ---
+        if re.search(r"\b(?:check\s+why\s+(?:my\s+)?(?:computer|pc|laptop|machine|system)\s+is\s+running\s+slow(?:ly)?|why\s+is\s+(?:my\s+)?(?:computer|pc|laptop|machine|system)\s+(?:running\s+)?slow(?:ly)?|diagnose\s+(?:my\s+)?(?:system|pc|computer|performance))\b", cleaned, re.IGNORECASE):
+            return {"intent": NovaIntent.SYSTEM_DIAGNOSTICS, "action": "diagnose_performance"}
+
+        if re.search(r"\b(?:system\s+diagnostics?|check\s+(?:system\s+)?(?:health|specs|resources)|resource\s+usage|cpu\s+usage|memory\s+usage|ram\s+usage)\b", cleaned, re.IGNORECASE):
+            return {"intent": NovaIntent.SYSTEM_DIAGNOSTICS, "action": "full_diagnostics"}
+
+        # --- Quick Notes ---
+        # Note deletion
+        m_del_note = re.match(r"^(?:please\s+)?(?:delete|remove)\s+note\s+(?:#)?['\"]?(\d+|[\w\s\.-]+?)['\"]?$", cleaned, re.IGNORECASE)
+        if m_del_note:
+            return {"intent": NovaIntent.DELETE_NOTE, "note_id": m_del_note.group(1).strip()}
+
+        # Note update / append
+        m_upd_note = re.match(r"^(?:please\s+)?(?:update|append\s+to)\s+note\s+(?:#)?['\"]?(\d+|[\w\s\.-]+?)['\"]?\s+(?:with|to|:)\s+['\"]?(.+?)['\"]?$", cleaned, re.IGNORECASE)
+        if m_upd_note:
+            is_append = "append" in cleaned.lower()
+            return {
+                "intent": NovaIntent.UPDATE_NOTE,
+                "note_id": m_upd_note.group(1).strip(),
+                "content": m_upd_note.group(2).strip(),
+                "append": is_append,
+            }
+
+        # Read specific note
+        m_get_note = re.match(r"^(?:please\s+)?(?:get|read|view)\s+note\s+(?:#)?['\"]?(\d+|[\w\s\.-]+?)['\"]?$", cleaned, re.IGNORECASE)
+        if m_get_note:
+            return {"intent": NovaIntent.GET_NOTE, "note_id": m_get_note.group(1).strip()}
+
+        # Search notes
+        m_find_note = re.match(r"^(?:please\s+)?(?:search|find)\s+notes?\s+(?:for|about|with)?\s*['\"]?(.+?)['\"]?$", cleaned, re.IGNORECASE)
+        if m_find_note and not re.match(r"^(?:all|my)?$", m_find_note.group(1).strip().lower()):
+            return {"intent": NovaIntent.SEARCH_NOTES, "query": m_find_note.group(1).strip()}
+
+        # List notes
+        if re.match(r"^(?:please\s+)?(?:list|show|view|get)\s+(?:all\s+)?(?:my\s+)?notes(?:\s+with\s+tag\s+['\"]?([\w\-]+)['\"]?)?$", cleaned, re.IGNORECASE):
+            m_tag = re.search(r"tag\s+['\"]?([\w\-]+)['\"]?", cleaned, re.IGNORECASE)
+            tag_val = m_tag.group(1).strip() if m_tag else None
+            return {"intent": NovaIntent.LIST_NOTES, "tag": tag_val}
+
+        # Save note (e.g. "Save a note that I need to revise operating systems tonight", "Take a note: XYZ", "Save note XYZ")
+        m_save_note = re.match(
+            r"^(?:please\s+)?(?:save|take|add|create)\s+(?:a\s+)?note\s+(?:that\s+|called\s+|titled\s+)?['\"]?(.+?)['\"]?$",
+            cleaned,
+            re.IGNORECASE,
+        ) or re.match(r"^note:\s*(.+)$", cleaned, re.IGNORECASE)
+        if m_save_note:
+            content_part = m_save_note.group(1).strip()
+            # If formatted like "titled <title> with content <content>"
+            m_title_content = re.match(r"^(?:titled|called)\s+['\"]?(.+?)['\"]?\s+(?:with\s+content|:)\s+['\"]?(.+?)['\"]?$", content_part, re.IGNORECASE)
+            if m_title_content:
+                return {
+                    "intent": NovaIntent.SAVE_NOTE,
+                    "title": m_title_content.group(1).strip(),
+                    "content": m_title_content.group(2).strip(),
+                }
+            return {
+                "intent": NovaIntent.SAVE_NOTE,
+                "content": content_part,
+                "title": None,
+            }
+
+        # --- Reminders ---
+        # List reminders
+        if re.match(r"^(?:please\s+)?(?:list|show|view|what\s+are)\s+(?:all\s+)?(?:my\s+)?reminders\b", cleaned, re.IGNORECASE):
+            return {"intent": NovaIntent.LIST_REMINDERS}
+
+        # Complete reminder
+        m_comp_rem = re.match(r"^(?:please\s+)?(?:complete|finish|mark\s+done)\s+reminder\s+(?:#)?(\d+)\b", cleaned, re.IGNORECASE)
+        if m_comp_rem:
+            return {"intent": NovaIntent.COMPLETE_REMINDER, "id": int(m_comp_rem.group(1))}
+
+        # Dismiss reminder
+        m_dism_rem = re.match(r"^(?:please\s+)?(?:dismiss|delete|remove|cancel)\s+reminder\s+(?:#)?(\d+)\b", cleaned, re.IGNORECASE)
+        if m_dism_rem:
+            return {"intent": NovaIntent.DISMISS_REMINDER, "id": int(m_dism_rem.group(1))}
+
+        # Clear completed reminders
+        if re.match(r"^(?:please\s+)?clear\s+(?:completed\s+|finished\s+)?reminders\b", cleaned, re.IGNORECASE):
+            return {"intent": NovaIntent.CLEAR_REMINDERS}
+
+        # Set reminder:
+        # 1. "Remind me at 8 PM to revise operating systems" or "Remind me in 10 minutes to take a break"
+        m_rem_time_first = re.match(
+            r"^(?:please\s+)?remind\s+me\s+(at\s+[\w\s:]+|in\s+[\w\s]+|on\s+[\w\s]+|tomorrow(?:\s+at\s+[\w\s:]+)?|tonight(?:\s+at\s+[\w\s:]+)?|today(?:\s+at\s+[\w\s:]+)?)\s+to\s+(.+)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_rem_time_first:
+            time_part = m_rem_time_first.group(1).strip()
+            action_part = m_rem_time_first.group(2).strip()
+            rec = "daily" if "every day" in cleaned.lower() or "daily" in cleaned.lower() else None
+            return {
+                "intent": NovaIntent.SET_REMINDER,
+                "message": action_part,
+                "due_time": time_part,
+                "recurrence": rec,
+            }
+
+        # 2. "Remind me to revise operating systems at 8 PM" or "Remind me to check email in 15 minutes"
+        m_rem_action_first = re.match(
+            r"^(?:please\s+)?remind\s+me\s+to\s+(.+?)\s+(at\s+[\w\s:]+|in\s+[\w\s]+|on\s+[\w\s]+|tomorrow(?:\s+at\s+[\w\s:]+)?|tonight(?:\s+at\s+[\w\s:]+)?|today(?:\s+at\s+[\w\s:]+)?)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_rem_action_first:
+            action_part = m_rem_action_first.group(1).strip()
+            time_part = m_rem_action_first.group(2).strip()
+            rec = "daily" if "every day" in cleaned.lower() or "daily" in cleaned.lower() else None
+            return {
+                "intent": NovaIntent.SET_REMINDER,
+                "message": action_part,
+                "due_time": time_part,
+                "recurrence": rec,
+            }
+
+        # 3. Generic "set reminder to <action> at <time>"
+        m_set_rem = re.match(
+            r"^(?:please\s+)?(?:set\s+(?:a\s+)?reminder|new\s+reminder)\s+(?:to\s+|for\s+)?(.+?)\s+(at\s+[\w\s:]+|in\s+[\w\s]+|on\s+[\w\s]+|tomorrow(?:\s+at\s+[\w\s:]+)?)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_set_rem:
+            action_part = m_set_rem.group(1).strip()
+            time_part = m_set_rem.group(2).strip()
+            return {
+                "intent": NovaIntent.SET_REMINDER,
+                "message": action_part,
+                "due_time": time_part,
+                "recurrence": None,
+            }
+
+        # --- Scheduled Tasks ---
+        # List schedules
+        if re.match(r"^(?:please\s+)?(?:list|show|view)\s+(?:scheduled\s+tasks|schedules)\b", cleaned, re.IGNORECASE):
+            return {"intent": NovaIntent.LIST_SCHEDULES}
+
+        # Cancel schedule
+        m_cancel_sched = re.match(r"^(?:please\s+)?(?:cancel|delete|remove)\s+(?:schedule|scheduled\s+task)\s+(?:#)?(\d+)\b", cleaned, re.IGNORECASE)
+        if m_cancel_sched:
+            return {"intent": NovaIntent.CANCEL_SCHEDULE, "id": int(m_cancel_sched.group(1))}
+
+        # Daily schedule: "Every day at 9 AM, open my college project" / "Daily at 8 PM: ..."
+        m_daily_sched = re.match(
+            r"^(?:every\s+day|daily)\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)[,:\s]+(.+)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_daily_sched:
+            raw_time = m_daily_sched.group(1).strip()
+            raw_action = m_daily_sched.group(2).strip()
+
+            # Parse action intent
+            sub_parsed = self.parse_single(raw_action)
+            action_intent = sub_parsed.get("intent")
+            # Extract parameters
+            action_params = {k: v for k, v in sub_parsed.items() if k not in ("intent", "raw")}
+
+            # Normalize time to HH:MM 24h
+            t_match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", raw_time, re.IGNORECASE)
+            time_hhmm = "09:00"
+            if t_match:
+                hr = int(t_match.group(1))
+                mn = int(t_match.group(2) or 0)
+                merid = t_match.group(3)
+                if merid:
+                    if merid.lower() == "pm" and hr < 12:
+                        hr += 12
+                    elif merid.lower() == "am" and hr == 12:
+                        hr = 0
+                time_hhmm = f"{hr:02d}:{mn:02d}"
+
+            return {
+                "intent": NovaIntent.SCHEDULE_TASK,
+                "name": f"Daily at {time_hhmm}: {raw_action}",
+                "target_intent": action_intent,
+                "target_params": action_params,
+                "schedule_type": "daily_at",
+                "time_of_day": time_hhmm,
+                "raw_action": raw_action,
             }
 
         # 4. Rename Item

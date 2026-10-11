@@ -102,6 +102,26 @@ class NovaPlanner:
         NovaIntent.FORGET: "forget",
         NovaIntent.ACTION_HISTORY: "action_history",
         NovaIntent.UNDO: "undo",
+        # Phase 4 Productivity Tools
+        NovaIntent.SAVE_NOTE: "save_note",
+        NovaIntent.LIST_NOTES: "list_notes",
+        NovaIntent.SEARCH_NOTES: "search_notes",
+        NovaIntent.GET_NOTE: "get_note",
+        NovaIntent.UPDATE_NOTE: "update_note",
+        NovaIntent.DELETE_NOTE: "delete_note",
+        NovaIntent.SET_REMINDER: "set_reminder",
+        NovaIntent.LIST_REMINDERS: "list_reminders",
+        NovaIntent.COMPLETE_REMINDER: "complete_reminder",
+        NovaIntent.DISMISS_REMINDER: "dismiss_reminder",
+        NovaIntent.CLEAR_REMINDERS: "clear_reminders",
+        NovaIntent.GET_CLIPBOARD: "get_clipboard",
+        NovaIntent.SET_CLIPBOARD: "set_clipboard",
+        NovaIntent.CLEAR_CLIPBOARD: "clear_clipboard",
+        NovaIntent.SAVE_CLIPBOARD_NOTE: "save_clipboard_note",
+        NovaIntent.SYSTEM_DIAGNOSTICS: "system_diagnostics",
+        NovaIntent.SCHEDULE_TASK: "schedule_task",
+        NovaIntent.LIST_SCHEDULES: "list_schedules",
+        NovaIntent.CANCEL_SCHEDULE: "cancel_schedule",
     }
 
     def __init__(self, intent_parser: Optional[IntentParser] = None, memory: Optional[Any] = None):
@@ -440,6 +460,102 @@ class NovaPlanner:
         elif intent == NovaIntent.UNDO:
             filt = params.get("filter")
             desc = f"Undo last {filt}" if filt else "Undo last operation"
+
+        elif intent == NovaIntent.SAVE_NOTE:
+            content = params.get("content", "").strip()
+            if not content:
+                return None, "Note content cannot be empty."
+            title = params.get("title")
+            desc = f"Save note: '{title or content[:30]}'"
+
+        elif intent == NovaIntent.LIST_NOTES:
+            tag = params.get("tag")
+            desc = f"List notes" + (f" with tag '{tag}'" if tag else "")
+
+        elif intent == NovaIntent.SEARCH_NOTES:
+            query = params.get("query", "").strip()
+            if not query:
+                return None, "Search query is empty."
+            desc = f"Search notes for '{query}'"
+
+        elif intent == NovaIntent.GET_NOTE:
+            nid = params.get("note_id")
+            if not nid:
+                return None, "Note ID is missing."
+            desc = f"Read note #{nid}"
+
+        elif intent == NovaIntent.UPDATE_NOTE:
+            nid = params.get("note_id")
+            content = params.get("content", "").strip()
+            if not nid or not content:
+                return None, "Note ID or updated content is missing."
+            desc = f"Update note #{nid}"
+
+        elif intent == NovaIntent.DELETE_NOTE:
+            nid = params.get("note_id")
+            if not nid:
+                return None, "Note ID to delete is missing."
+            is_destructive = True
+            desc = f"Delete note #{nid}"
+
+        elif intent == NovaIntent.SET_REMINDER:
+            msg = params.get("message", "").strip()
+            due = params.get("due_time")
+            if not msg or not due:
+                return None, "Reminder message or due time is missing."
+            rec = params.get("recurrence")
+            desc = f"Set reminder for '{msg}' at {due}" + (f" ({rec})" if rec else "")
+
+        elif intent == NovaIntent.LIST_REMINDERS:
+            desc = "List active reminders"
+
+        elif intent == NovaIntent.COMPLETE_REMINDER:
+            rid = params.get("id")
+            if not rid:
+                return None, "Reminder ID is missing."
+            desc = f"Complete reminder #{rid}"
+
+        elif intent == NovaIntent.DISMISS_REMINDER:
+            rid = params.get("id")
+            if not rid:
+                return None, "Reminder ID is missing."
+            desc = f"Dismiss reminder #{rid}"
+
+        elif intent == NovaIntent.CLEAR_REMINDERS:
+            desc = "Clear finished reminders"
+
+        elif intent == NovaIntent.GET_CLIPBOARD:
+            desc = "Read clipboard contents"
+
+        elif intent == NovaIntent.SET_CLIPBOARD:
+            text = params.get("text", "")
+            desc = f"Copy text to clipboard ({len(text)} chars)"
+
+        elif intent == NovaIntent.CLEAR_CLIPBOARD:
+            desc = "Clear clipboard"
+
+        elif intent == NovaIntent.SAVE_CLIPBOARD_NOTE:
+            desc = "Save clipboard content as note"
+
+        elif intent == NovaIntent.SYSTEM_DIAGNOSTICS:
+            diag_act = params.get("action", "full_diagnostics")
+            desc = "Analyze system performance" if diag_act == "diagnose_performance" else "Run system diagnostics"
+
+        elif intent == NovaIntent.SCHEDULE_TASK:
+            name = params.get("name", "Scheduled Task")
+            tgt = params.get("target_intent")
+            if not tgt:
+                return None, "Target action for scheduled task is missing."
+            desc = f"Schedule task: '{name}'"
+
+        elif intent == NovaIntent.LIST_SCHEDULES:
+            desc = "List scheduled tasks"
+
+        elif intent == NovaIntent.CANCEL_SCHEDULE:
+            sid = params.get("id")
+            if not sid:
+                return None, "Schedule ID to cancel is missing."
+            desc = f"Cancel scheduled task #{sid}"
 
         elif intent in (NovaIntent.LOCK_SYSTEM, NovaIntent.SLEEP_SYSTEM, NovaIntent.ABORT_POWER, NovaIntent.BATTERY_STATUS, NovaIntent.LANGUAGE_CHART, NovaIntent.HELP):
             desc = action.replace("_", " ").title()

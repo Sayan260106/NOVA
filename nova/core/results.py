@@ -34,13 +34,14 @@ class ToolResult(dict):
         clean_data.update(extra_data)
 
         # Initialize dict with standard contract fields and flattened data fields
+        flattened = {k: v for k, v in clean_data.items() if k not in ("success", "message", "data", "error", "undo_info")}
         super().__init__(
             success=success,
             message=message,
             data=clean_data,
             error=error,
             undo_info=undo_info,
-            **clean_data,
+            **flattened,
         )
         self.success = success
         self.message = message
