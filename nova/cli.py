@@ -65,12 +65,22 @@ def run_cli(dry_run_power: bool = True):
     batt = brain.power_manager.get_battery_status()
     batt_str = f"{batt['percent']}% ({batt['status']})" if batt.get("has_battery") else "N/A"
 
-    print(f"\n[Nova Online]")
+    # Query productivity tools status
+    try:
+        note_count = len(brain.notes_manager.list_notes().data.get("notes", []))
+        rem_count = len(brain.reminder_manager.list_reminders().data.get("reminders", []))
+        sched_count = len(brain.scheduler.list_schedules(active_only=True).data.get("schedules", []))
+        prod_str = f"{note_count} Note(s), {rem_count} Active Reminder(s), {sched_count} Schedule(s)"
+    except Exception:
+        prod_str = "Active"
+
+    print(f"\n[Nova Online - Phase 4 Ready]")
     print(f" • Installed Applications Cataloged: {app_count}")
     print(f" • Power / Battery Status: {batt_str}")
+    print(f" • Daily Productivity Tools: {prod_str}")
     print(f" • Local Brain Intelligence (Ollama): {'Active (' + brain.ollama.model_name + ')' if brain.ollama.is_available() else 'Offline (Rule Engine Active)'}")
     print(f" • Power Operations Mode: {'DRY RUN (Safe)' if dry_run_power else 'ACTIVE SYSTEM EXECUTION'}")
-    print(f" • Type 'help' for examples or 'exit' to quit.\n")
+    print(f" • Type 'help' (or 'help <topic>') for examples, 'exit' to quit.\n")
 
     while True:
         try:
@@ -80,6 +90,7 @@ def run_cli(dry_run_power: bool = True):
 
             if user_input.lower() in ("exit", "quit", "bye", "shutdown nova"):
                 print("\nNova: Shutting down virtual assistant systems. Goodbye, sir.\n")
+                brain.shutdown()
                 break
 
             # Confirm real restart or shutdown if not in dry-run mode

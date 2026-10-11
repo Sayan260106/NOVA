@@ -12,7 +12,7 @@ import logging
 import threading
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union, Callable
+from typing import Dict, List, Optional, Any, Union, Callable, Tuple
 from contextlib import contextmanager
 
 from nova.config import SCHEDULES_DB_PATH
@@ -105,8 +105,7 @@ class TaskScheduler:
         interval_seconds: Optional[float] = None,
         target_time: Optional[float] = None,
         now: Optional[datetime] = None,
-    # pyrefly: ignore [unknown-name]
-    ) -> Tuple_float_iso:
+    ) -> Tuple[float, str]:
         """
         Calculates the next execution timestamp and its ISO string.
         """

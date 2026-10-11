@@ -1,222 +1,231 @@
 # Project Nova — JARVIS-Class Virtual Assistant
 
-Nova is an intelligent, modular, agentic virtual assistant built for Windows OS automation, system control, file intelligence, application management, multi-step command execution, and privacy-first local summarization.
+Nova is an intelligent, modular, agentic virtual assistant built for Windows OS automation, system control, zero-path file intelligence, application management, multi-step compound command execution, privacy-first local summarization, persistent user memory, and daily productivity workflows.
 
 ---
 
-## 🚀 Capabilities Implemented (Checkpoints)
+## 🌟 Architecture & Implementation Roadmap
 
-### a) Application Discovery & Launching
-- Discovers **all applications** present on the laptop:
-  - Windows Modern / Store apps (UWP) via `Get-StartApps` & `shell:AppsFolder`
-  - Start Menu shortcuts (`.lnk`) across system and user profiles
-  - Windows Registry `App Paths` (`HKLM` & `HKCU`)
-  - Standard system executables in `PATH`
-- Supports alias resolution and fuzzy matching (e.g. `calc` -> `Calculator`, `chrome` -> `Google Chrome`, `notes` -> `Notepad`, `terminal` -> `Windows Terminal`).
-- Zero-configuration launching of any installed program.
+Nova is engineered as a robust, layered agentic system:
 
-### b) Zero-Path File & Folder Intelligence
-- **D: Drive Default Workspace**: If a destination folder is not explicitly specified, Nova automatically creates folders and files directly in the root of the **D: drive** (`D:\`).
-- **Specific Folder Creation**: When a folder is specified (e.g. `create folder Notes inside Projects` or `create file data.txt in specific folder Vault`), Nova locates the target folder anywhere on the laptop and places the new item inside it.
-- **Rename Files & Folders**:
-  - `rename file <old_name> to <new_name>`: Locates the file anywhere on the computer and renames it in place.
-  - `rename folder <old_name> to <new_name>`: Locates the directory and renames it.
-- **Copy & Move**:
-  - `copy file <name> to <destination_folder>`: Resolves both source and destination folder automatically.
-  - `move file <name> to <destination_folder>`: Resolves both source and destination folder automatically.
-- **Delete with Disambiguation & Confirmation**:
-  - `delete file <name>` or `delete folder <name>`: Automatically discovers all files/folders with the same name across all drives.
-  - If multiple duplicates exist, Nova lists each matching path with its file size/type and asks you to select which one to delete.
-  - Asks for explicit confirmation (`[y/N]`) displaying the exact target path before executing deletion.
-  - Safely moves to Windows Recycle Bin via `send2trash` (or permanent deletion when specified).
-- **Open with Disambiguation & Confirmation**:
-  - `open <name>`: Discovers all files, folders, and applications matching the given name or stem.
-  - If multiple candidates exist (e.g. both a folder and file named `Project`, or duplicate files across different folders), Nova lists each candidate (`[1] Folder`, `[2] File`), asks you which one to open, prompts for confirmation (`[Y/n]`), and opens that item.
-  - `open file <name>`: Specifically filters for and opens matching files in default editors.
-  - `open folder <name>`: Specifically filters for and opens matching directories in File Explorer.
-  - `launch <app>` / `open app <name>`: Discovers and launches installed applications.
+```
+ User Voice / CLI Command
+           │
+           ▼
+   [Intent Parser] ──► (Natural Language, Regex Rules, Ollama Decomposition)
+           │
+           ▼
+    [Nova Planner] ──► (Ordered PlanSteps, Dependency Resolution, Safety Flags)
+           │
+           ▼
+    [Nova Policy]  ──► (Protected Directories, Whitelist, Ambiguity Gates)
+           │
+           ▼
+   [Nova Executor] ──► (Unified Multi-Manager Execution, Audit Logs & Undo Stack)
+     ├── File Manager (`nova.system.file_manager`)
+     ├── App Manager (`nova.system.app_manager`)
+     ├── Power Manager (`nova.system.power_manager`)
+     ├── Persistent Memory (`nova.core.memory`)
+     ├── Action History (`nova.core.action_history`)
+     ├── Notes Manager (`nova.tools.notes`)
+     ├── Reminder Manager (`nova.tools.reminders`)
+     ├── Clipboard Manager (`nova.tools.clipboard`)
+     ├── System Diagnostics (`nova.tools.system_diagnostics`)
+     └── Task Scheduler (`nova.tools.scheduler`)
+```
 
-### c) System Power & Session Management
-- **Lock**: Workstation lock via Windows `user32.dll LockWorkStation`.
-- **Sleep**: Suspend / standby via Windows `powrprof.dll SetSuspendState`.
-- **Restart**: Command generation & scheduling via `shutdown /r /t <seconds>`.
-- **Shutdown**: Command generation & scheduling via `shutdown /s /t <seconds>`.
-- **Abort Power**: Aborts any scheduled restart/shutdown via `shutdown /a`.
-- **Battery & Power Monitoring**: Real-time battery %, charging status, remaining time.
-- **Safety**: Safe dry-run mode enabled by default; confirmation prompt required for live power execution.
+- **Phase 1: Safe Execution & Pipeline Foundation**  
+  Standardized `ToolResult` contracts, dependency-aware `NovaPlanner`, safety-gated `NovaPolicy`, pre/post-execution verification in `NovaExecutor`.
+- **Phase 2: OS Automation & File Intelligence**  
+  Start Menu and UWP application discovery, zero-path D: drive file/folder CRUD, duplicate name disambiguation, Windows power states.
+- **Phase 3: Persistent Memory & Action History**  
+  SQLite user preferences (`nova_memory.db`), audit logging (`nova_history.db`), pre-flight collision-checked rollback and undo.
+- **Phase 4: Practical Daily Productivity Assistant**  
+  Quick notes scratchpad, natural language reminders, privacy-safe clipboard utilities, non-terminating system diagnostics, persistent task scheduler.
 
-### d) Universal Search & Indexing across File Explorer
-- Fast SQLite-backed indexer (`~/.nova/nova_index.db`) caching files, directories, and installed software.
-- Multi-drive search across all logical drives (`C:\`, `D:\`, etc.) present in File Explorer.
-- Sub-second search across applications, files, and folders with relevance ranking.
+---
 
-### e) Complex & Compound Multi-Step Commands (Goal a)
-- Understands and executes multi-step commands joined by natural conjunctions (`and`, `then`, `and then`, `after that`, `;`).
-- Automatically maintains execution context across steps (e.g., creating a folder and immediately placing a file inside that newly created folder without needing redundant paths).
-- Hybrid execution: Powered by local Ollama LLM intent decomposition when available, with a robust deterministic rule-based compound engine as an instant fallback.
+## 🚀 Capabilities Implemented
 
-### f) Local & Offline Summarization (Goal b — Zero API Keys)
-- Summarizes any arbitrary text, local file/document, or conversational session context completely offline.
-- Powered by local Ollama (`llama3.2` / `mistral` / etc.) running locally at `localhost:11434` without any external cloud APIs, internet connectivity, or API keys required.
-- High-reliability heuristic extractive summarizer fallback that works 100% offline even if Ollama is not installed or running.
+### 1. 📝 Quick Notes & Personal Scratchpad (Phase 4)
+- **SQLite Persistence**: Stores notes in `~/.nova/nova_notes.db` across sessions with WAL journal mode and timestamp indexing.
+- **Auto-Titled & Tagged**: Automatically generates concise titles from content when omitted and supports multi-tag filtering.
+- **Full-Text Search**: Fast keyword searching across titles, body content, and tags.
+- **Reversible Deletions**: Note deletion produces structured `undo_info` allowing restoration.
+
+### 2. ⏰ Reminders & Task Tracking (Phase 4)
+- **Natural Language Parsing**: Handles relative times (`in 10 minutes`, `in 2 hours`), 12-hour/24-hour absolute times (`at 8 PM`, `at 20:00`), and day markers (`tomorrow at 9 AM`).
+- **Validation & Duplicate Prevention**: Rejects invalid dates/times with helpful feedback and blocks duplicate pending reminders.
+- **Recurrence Support**: Supports recurring schedules (`daily`, `weekly`, `hourly`, `workdays`).
+- **Non-Blocking Background Monitor**: A background daemon monitors due reminders without blocking the interactive CLI loop.
+
+### 3. 📋 Clipboard Utilities & Privacy Safeguards (Phase 4)
+- **Native Windows API**: Leverages Win32 user32 clipboard APIs without heavy third-party dependencies.
+- **Sensitive Secret Detection**: Scans clipboard text for API keys (OpenAI, AWS, GitHub), private key blocks, Bearer tokens, connection strings, and payment card numbers.
+- **Safe Masking & Note Conversion**: Automatically masks sensitive credentials (`sk-****...`) in terminal output and allows saving clipboard text directly to persistent notes.
+
+### 4. 🩺 System Diagnostics & Resource Profiling (Phase 4)
+- **Hardware Telemetry**: Inspects CPU utilization, logical core counts, RAM memory usage, drive capacities, and battery states.
+- **Top Process Consumers**: Identifies top processes by CPU and memory consumption.
+- **Performance Diagnostics**: Analyzes system bottlenecks and explains why a PC may feel slow **without terminating any processes automatically**.
+
+### 5. ⏱️ Scheduled Tasks & Automation (Phase 4)
+- **Persistent Job Queue**: Backed by `~/.nova/nova_schedules.db`. Pending and recurring tasks are recovered and rescheduled across application restarts.
+- **Security Policy Enforcement**: Allows **only approved, policy-validated NOVA actions** (`OPEN_PROJECT`, `OPEN_APP`, `OPEN_ITEM`, `SUMMARIZE`, `BATTERY_STATUS`, `CREATE_FILE`, `CREATE_FOLDER`, `SYSTEM_DIAGNOSTICS`). Rejects arbitrary shell scripts and destructive commands (`DELETE_ITEM`, `SHUTDOWN_SYSTEM`, `RESTART_SYSTEM`).
+- **Non-Blocking Background Execution**: Background daemon safely dispatches due tasks without freezing user interactions.
+
+### 6. 🧠 Persistent Memory & Custom Aliases (Phase 3)
+- Stores project locations, user preferences, custom application aliases, and common folders across restarts in SQLite (`~/.nova/nova_memory.db`).
+- Allows dynamic inspection and selective clearing via conversational commands.
+
+### 7. 📜 Action History & Safe Undo (Phase 3)
+- Audit log tracking all executed operations in `~/.nova/nova_history.db`.
+- Pre-flight rollback validation verifies source item presence and destination safety before executing undo restorations.
+
+### 8. 📁 Zero-Path File & Folder Intelligence (Phase 2)
+- **D: Drive Default**: Defaults to `D:\` if no parent directory is specified.
+- **Smart Resolution**: Resolves target directories anywhere on the computer without explicit absolute paths.
+- **Duplicate Disambiguation & Confirmation**: Identifies duplicate names across all drives, prompting interactive disambiguation and safety confirmation before deletion or opening.
+
+### 9. 🚀 Application Discovery & Launching (Phase 2)
+- Discovers Modern UWP Store apps (`shell:AppsFolder`), Start Menu programs, Windows Registry paths, and PATH executables.
+- Supports fuzzy matching and custom aliases (e.g., `calc`, `chrome`, `notes`, `terminal`, `code`).
+
+### 10. ⚡ Power & System Session Management (Phase 2)
+- Workstation lock (`user32.dll`), standby sleep (`powrprof.dll`), scheduled restart, shutdown countdown timers, and cancellation.
+- Safe dry-run mode enabled by default; requires `--live-power` for actual system execution.
+
+### 11. 🤖 Offline Local Summarization (Zero API Keys)
+- Summarizes arbitrary text, local documents, or conversation history using local Ollama models (`localhost:11434`) or a 100% offline heuristic fallback.
 
 ---
 
 ## 📖 Complete Nova Commands Reference
 
-Nova supports natural conversational phrasing, explicit commands, and multi-step instructions.
+Nova supports natural conversational phrasing, explicit instructions, and compound multi-step commands.
 
-### 1. 🚀 Application Management
+### 1. 📝 Quick Notes & Scratchpad
 | Command / Syntax | Example | Description |
 | :--- | :--- | :--- |
-| `open <app>` | `open chrome` | Launches the application using fuzzy matching & aliases |
-| `launch <app>` | `launch calculator` | Synonym for launching applications |
-| `start <app>` | `start notepad` | Synonym for launching applications |
-| `run <app>` | `run terminal` | Synonym for launching applications |
-| `open app <name>` | `open app spotify` | Explicitly targets installed applications |
-
-*Supported Aliases:* `calc` -> Calculator, `chrome` -> Google Chrome, `notes` -> Notepad, `terminal` -> Windows Terminal, `code` -> Visual Studio Code, `edge` -> Microsoft Edge, `files` / `explorer` -> File Explorer, and more.
+| `save note <content>` | `save a note that I need to revise operating systems tonight` | Saves note with auto-derived title |
+| `take note: <content>` | `take a note: Meeting with mentor at 4 PM` | Scratchpad note entry |
+| `note titled <title> with content <text>` | `note titled Exams with content OS paper on Friday` | Saves note with custom title |
+| `list notes [with tag <tag>]` | `list notes` or `list notes with tag study` | Displays saved notes with tags |
+| `search notes for <query>` | `search notes for operating systems` | Searches across title, content, and tags |
+| `read note <id>` / `view note <id>` | `read note 1` | Displays full note details |
+| `update note <id> with <content>` | `update note 1 with Chapter 1 to 5` | Updates existing note |
+| `append to note <id>: <content>` | `append to note 1: Also read paging` | Appends text to existing note |
+| `delete note <id>` | `delete note 1` | Removes note (reversible via undo) |
 
 ---
 
-### 2. 📁 Zero-Path File & Folder Intelligence
+### 2. ⏰ Reminders & Task Tracking
 | Command / Syntax | Example | Description |
 | :--- | :--- | :--- |
-| `create folder <name>` | `create folder Projects` | Creates folder in **D: drive** (`D:\`) by default |
-| `create folder <name> inside <parent>` | `create folder Notes inside Projects` | Locates `<parent>` anywhere on PC and creates folder inside |
-| `make a folder '<name>' in <parent>` | `make a folder 'Demo' in Project folder` | Natural phrasing for nested folder creation |
-| `create file <name>` | `create file todo.txt` | Creates an empty file in **D: drive** root |
-| `create file <name> with content '<text>'` | `create file notes.txt with content 'Call client'` | Creates file with initial text content |
-| `create file <name> [with content '...'] inside <parent>` | `create file brief.txt with content 'Nova' inside Vault` | Creates file with content inside the resolved parent directory |
-| `rename file <old> to <new>` | `rename file draft.txt to final.txt` | Discovers `<old>` anywhere on PC and renames it in place |
-| `rename folder <old> to <new>` | `rename folder DeepArchive to Classified` | Discovers `<old>` folder and renames it in place |
-| `copy file <src> to <dest>` | `copy file report.pdf to Backup` | Auto-resolves source file and destination folder |
-| `move file <src> to <dest>` | `move file data.csv to Archive` | Auto-resolves source file and destination folder |
-| `delete file <name>` | `delete file temp.log` | Safely moves file to **Windows Recycle Bin** (`send2trash`) |
-| `delete folder <name>` | `delete folder TempDir` | Safely moves folder to **Windows Recycle Bin** |
-| `delete file/folder <name> permanently` | `delete file secret.key permanently` | Permanently deletes item from disk |
-
-#### 🛡️ Duplicate Disambiguation & Deletion Confirmation
-If duplicate files or folders exist with the same name across your drives:
-1. Nova displays a numbered list of all discovered candidates with their paths and file sizes.
-2. Prompts you to pick the exact candidate: `Which one would you like to delete? [1-N] (or 'c' to cancel)`.
-3. Displays a final confirmation prompt (`[y/N]`) showing the exact path before performing deletion.
+| `remind me at <time> to <action>` | `remind me at 8 PM to revise operating systems` | Absolute time reminder |
+| `remind me to <action> at <time>` | `remind me to call Mom at 7:30 PM` | Natural word order syntax |
+| `remind me in <duration> to <action>` | `remind me in 15 minutes to take a break` | Relative duration reminder |
+| `remind me tomorrow at <time> to ...` | `remind me tomorrow at 9 AM to submit assignment` | Next-day reminder |
+| `every day at <time> remind me to ...` | `daily at 8 PM remind me to take medicine` | Recurring daily reminder |
+| `list reminders` / `show reminders` | `what are my reminders` | Lists all active pending reminders |
+| `complete reminder <id>` | `complete reminder 1` | Marks reminder as completed |
+| `dismiss reminder <id>` | `dismiss reminder 1` | Dismisses active alert |
+| `clear completed reminders` | `clear completed reminders` | Removes finished/dismissed reminders |
 
 ---
 
-### 3. 📂 Universal Open (Apps, Files & Folders)
+### 3. 📋 Clipboard Utilities & Privacy Safeguards
 | Command / Syntax | Example | Description |
 | :--- | :--- | :--- |
-| `open <name>` | `open Project` | Discovers matching applications, files, and folders across system |
-| `open file <name>` | `open file budget.xlsx` | Specifically searches for and opens files in default editor |
-| `open folder <name>` | `open folder Documents` | Specifically searches for and opens folders in Windows File Explorer |
-
-#### 🔀 Open Disambiguation & Confirmation
-When multiple items share the same name (e.g. an application, a file, and a folder):
-1. Nova categorizes candidates (`📁 Folder`, `📄 File`, `🖥️ App`) with full paths and sizes.
-2. Prompts you to select which target you want to open: `Which one would you like to open? [1-N]`.
-3. Prompts for confirmation (`[Y/n]`) before opening.
+| `read clipboard` / `show clipboard` | `what's in my clipboard` | Reads clipboard with sensitive pattern masking |
+| `copy <text> to clipboard` | `copy 'Hello World' to clipboard` | Copies text to system clipboard |
+| `clear clipboard` | `clear clipboard` | Securely clears clipboard data |
+| `save clipboard as note` | `save the current clipboard text as a note` | Stores clipboard text in notes with tags |
 
 ---
 
-### 4. 🔎 Universal Search & Discovery across File Explorer
+### 4. 🩺 System Diagnostics & Health
 | Command / Syntax | Example | Description |
 | :--- | :--- | :--- |
-| `find app <name>` | `find app spotify` | Searches cataloged installed applications |
-| `find file <name>` | `find file run_nova.py` | Searches indexed files across all logical drives (`C:\`, `D:\`) |
-| `find folder <name>` | `find folder Documents` | Searches indexed directories across all drives |
-| `find <query>` | `find invoice` | Universal search across applications, files, and folders |
-| `search for <query>` | `search for report.pdf` | Synonym for universal search |
-| `locate <query>` | `locate python` | Synonym for universal search |
+| `check why computer is running slowly` | `why is my pc running slow?` | Diagnoses CPU/RAM/disk bottlenecks without killing processes |
+| `system diagnostics` | `check system health` | Complete CPU, RAM, disk, and process overview |
+| `cpu usage` / `memory usage` | `cpu usage` | Quick hardware resource status |
 
 ---
 
-### 5. 🧠 Complex & Compound Multi-Step Commands
-Connect multiple actions into a single instruction using `and`, `then`, `and then`, `after that`, or `;`:
-
-| Example Instruction | Execution Flow |
-| :--- | :--- |
-| `Make a folder 'Demo' in Project folder and create a file 'xyz.txt'` | 1. Creates `Demo` inside `Project`<br>2. Automatically places `xyz.txt` inside `Demo` |
-| `Create folder TestSuite in D: drive and create file results.txt with content 'Passed' inside TestSuite` | 1. Creates `TestSuite` in `D:\`<br>2. Creates `results.txt` with content inside `TestSuite` |
-| `create folder Vault then create file keys.txt inside Vault` | Chains creation in sequence |
-| `open notepad; open calculator` | Executes multiple application launches sequentially |
-
----
-
-### 6. 📝 Summarization (100% Local & Offline — Zero API Keys)
+### 5. ⏱️ Scheduled Tasks & Automation
 | Command / Syntax | Example | Description |
 | :--- | :--- | :--- |
-| `summarize this text: <text>` | `summarize this text: Quantum computing uses qubits in superposition...` | Summarizes arbitrary text directly |
-| `summarize: <text>` | `summarize: Photosynthesis converts light energy into chemical energy.` | Short syntax for text summarization |
-| `summarize file <filename>` | `summarize file results.txt` | Locates file on disk, reads text, and produces concise summary |
-| `summarize document <file> in <folder>` | `summarize document report.pdf inside Vault` | Summarizes specific file inside specified folder |
-| `summarize context` | `summarize context` | Summarizes recent conversation and executed actions |
-| `summarize conversation` | `summarize conversation` | Synonym for session context summarization |
-| `summarize history` | `summarize history` | Synonym for session context summarization |
+| `every day at <time>, <action>` | `Every day at 9 AM, open my college project` | Schedules recurring daily validated task |
+| `daily at <time>: <action>` | `daily at 8 PM: check system health` | Schedules recurring diagnostic check |
+| `list scheduled tasks` | `show schedules` | Lists active persistent automation jobs |
+| `cancel schedule <id>` | `cancel schedule 1` | Cancels and removes scheduled task |
 
 ---
 
-### 7. ⚡ System Power & Battery Management
+### 6. 🧠 Persistent User Memory & Preferences
 | Command / Syntax | Example | Description |
 | :--- | :--- | :--- |
-| `lock laptop` / `lock screen` | `lock laptop` | Locks the Windows workstation |
-| `sleep laptop` / `put laptop to sleep` | `sleep laptop` | Suspends system to low-power standby |
-| `restart laptop` | `restart laptop` | Restarts the computer immediately |
-| `restart laptop in <seconds> seconds` | `restart laptop in 60 seconds` | Schedules restart with a countdown timer |
-| `shutdown laptop` | `shutdown laptop` | Shuts down the computer immediately |
-| `shutdown laptop in <seconds> seconds` | `shutdown laptop in 90 seconds` | Schedules shutdown with a countdown timer |
-| `cancel shutdown` / `abort restart` | `cancel shutdown` | Aborts any active scheduled shutdown or restart |
-| `battery status` / `power status` | `battery status` | Shows battery %, charging status, and remaining runtime |
-
-> **Safety Notice:** Nova runs in safe dry-run mode by default. Real power actions require passing the `--live-power` flag and interactive confirmation.
+| `remember that my <name> project is in <path>` | `remember that my NOVA project is in D:\Nova` | Stores project location across restarts |
+| `remember that alias <name> is <app>` | `remember that alias browser is Google Chrome` | Stores custom app alias |
+| `remember that <key> is <value>` | `remember that editor is VS Code` | Stores user preference |
+| `what do you remember` / `recall all` | `recall editor` | Inspects stored memories |
+| `forget my <name> project` / `forget <key>` | `forget editor` | Removes specific memory |
+| `clear memories` | `forget everything` | Wipes all stored preferences |
 
 ---
 
-### 8. 🏛️ System Architecture & Memory
+### 7. 📜 Action History, Audit Logs & Safe Undo
 | Command / Syntax | Example | Description |
 | :--- | :--- | :--- |
-| `show language chart` | `show language chart` | Displays the complete 24-component JARVIS architecture & tech stack chart |
-| `languages` / `tech stack` | `languages` | Displays programming language recommendations for virtual assistants |
+| `what did you do today` | `what files did you move today` | Audit log of executed operations |
+| `show action history` | `action history` | Inspects recent actions |
+| `undo` / `undo last action` | `undo last move` | Restores previous reversible state with pre-flight safety |
 
 ---
 
-### 9. 🚪 Session Control
+### 8. 📁 Zero-Path File & Folder Intelligence
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `create folder <name>` | `create folder Projects` | Creates folder in `D:\` by default |
+| `create folder <name> inside <parent>` | `create folder Notes inside Projects` | Creates folder in resolved parent |
+| `create file <name> [with content '...']` | `create file todo.txt with content 'Study'` | Creates file in `D:\` or specified parent |
+| `rename file/folder <old> to <new>` | `rename file draft.txt to final.txt` | Discovers and renames item in place |
+| `copy file <src> to <dest>` | `copy file report.pdf to Backup` | Resolves source and destination folder |
+| `move file <src> to <dest>` | `move file data.csv to Archive` | Resolves source and destination folder |
+| `delete file/folder <name>` | `delete file temp.log` | Safe delete to Recycle Bin (`send2trash`) |
+| `delete ... permanently` | `delete folder Cache permanently` | Permanent deletion from disk |
+
+---
+
+### 9. 🚀 Application Launching & Universal Open
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `open <app>` / `launch <app>` | `open chrome` or `launch calculator` | Launches application with alias support |
+| `open <name>` | `open Project` | Discovers and opens app, file, or folder with disambiguation |
+| `open file <name>` | `open file budget.xlsx` | Opens file in default registered program |
+| `open folder <name>` | `open folder Documents` | Opens folder in Windows File Explorer |
+
+---
+
+### 10. ⚡ Power & Session Controls
+| Command / Syntax | Example | Description |
+| :--- | :--- | :--- |
+| `lock laptop` / `lock screen` | `lock laptop` | Locks workstation screen |
+| `sleep laptop` | `sleep laptop` | Puts system into standby |
+| `restart laptop [in X sec]` | `restart laptop in 60 seconds` | Restarts system with optional countdown |
+| `shutdown laptop [in X sec]` | `shutdown laptop in 90 seconds` | Shuts down system with countdown |
+| `cancel shutdown` | `cancel shutdown` | Aborts scheduled restart or shutdown |
+| `battery status` | `battery status` | Displays battery %, charging state, and remaining time |
+
+---
+
+### 11. ❓ Help & Manual
 | Command / Syntax | Description |
 | :--- | :--- |
-| `help` / `commands` / `what can you do` | Displays the complete Nova interactive command manual |
-| `exit` / `quit` / `bye` / `shutdown nova` | Shuts down the Nova virtual assistant session cleanly |
-
----
-
-## 🧠 Memory: Component Architecture & Programming Languages
-
-| JARVIS Component                       | Recommended Language               | Why                                                                     |
-| -------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------- |
-| 🧠 **Main AI / Agent Brain**           | **Python**                         | Best AI/LLM ecosystem and easy agent development                        |
-| 🤖 **LLM Integration**                 | **Python**                         | Excellent SDK/API support for AI models                                 |
-| 🎙️ **Speech-to-Text (STT)**           | **Python**                         | Strong support for Whisper, Vosk and other speech engines               |
-| 🔊 **Text-to-Speech (TTS)**            | **Python**                         | Easy integration with local and cloud TTS engines                       |
-| 👂 **Wake Word Detection**             | **Python + C++ engine if needed**  | Python for orchestration; native engine for very low latency            |
-| ⚡ **Real-Time Audio Processing**       | **C++**                            | Better performance for continuous audio processing                      |
-| 🧠 **Memory System**                   | **Python**                         | Easy integration with databases, embeddings and vector DBs              |
-| 🔎 **RAG / Document Search**           | **Python**                         | Strong ecosystem for embeddings, retrieval and AI pipelines             |
-| 🛠️ **Tool/Function Calling**          | **Python**                         | Easy integration with APIs, scripts and applications                    |
-| 💻 **Windows OS Automation**           | **Python**                         | Excellent libraries for processes, files, keyboard/mouse and automation |
-| 🐧 **Linux System Control**            | **Python + Bash**                  | Python orchestration + native Linux commands                            |
-| ⚙️ **Low-Level OS Operations**         | **C++**                            | Use when you need maximum performance/native system access              |
-| 🔌 **Hardware / ESP32 / IoT**          | **C/C++**                          | Standard choice for microcontrollers and embedded systems               |
-| 🌐 **Backend Server**                  | **Python (FastAPI)**               | Fast, asynchronous and excellent for AI services                        |
-| 🔄 **Real-Time Communication**         | **Python + WebSocket**             | Low-latency communication between components                            |
-| 🖥️ **JARVIS Desktop UI**              | **TypeScript + React**             | Rich, animated and modern interface                                     |
-| 🎨 **JARVIS HUD / Animations**         | **TypeScript + React + CSS/WebGL** | Best for futuristic visual interface                                    |
-| 🌐 **Web Dashboard**                   | **TypeScript + React**             | Same UI technology can be reused                                        |
-| 📱 **Mobile App**                      | **TypeScript + React Native**      | Reuse much of the frontend knowledge/code                               |
-| 🗄️ **Database**                       | **SQL**                            | Reliable structured storage                                             |
-| 🔍 **Vector Database**                 | **Python + Qdrant/FAISS/etc.**     | Python integrates easily with embeddings                                |
-| 📊 **Data/Analytics**                  | **Python**                         | NumPy, Pandas, visualization ecosystem                                  |
-| 🔐 **Authentication/Security**         | **Python/TypeScript**              | Depends on whether auth is backend or frontend                          |
-| 🚀 **Performance-Critical Algorithms** | **C++**                            | Use only where profiling shows Python is a bottleneck                   |
-| 🧪 **Testing / Automation**            | **Python**                         | Easy unit, integration and system testing                               |
+| `help` | Displays the complete interactive command reference manual |
+| `help <topic>` | Displays focused help for `notes`, `reminders`, `clipboard`, `diagnostics`, `scheduler`, `memory`, `files`, `apps`, `power` |
+| `exit` / `quit` | Closes Nova session and stops background services cleanly |
 
 ---
 
@@ -225,7 +234,7 @@ Connect multiple actions into a single instruction using `and`, `then`, `and the
 ### 1. Prerequisites
 - **Windows 10 / 11**
 - **Python 3.10+** (Python 3.12/3.14 compatible)
-- *(Optional, for local LLM)* **Ollama**:
+- *(Optional, for offline local LLM)* **Ollama**:
   ```bash
   # Download from https://ollama.com and pull a lightweight model
   ollama pull llama3.2
@@ -262,32 +271,21 @@ Enables real execution of workstation lock, suspend/sleep, and restart/shutdown 
 
 ---
 
-## 🧪 Test Suites & Verification
+## 🧪 Automated Test Suite (106+ Tests)
 
-Nova features a complete automated testing suite covering all checkpoints:
+Nova features comprehensive automated test coverage across all subsystems:
 
 ```bash
-# 1. Comprehensive Verification Suite (All 41 Checkpoints)
-.venv\Scripts\python tests/run_verification.py
+# Run all 106 automated tests
+.venv\Scripts\python -m unittest discover -s tests -p "test_*.py"
 
-# 2. Complex Multi-Step Commands & Summarization Suite (Goal a & Goal b)
-.venv\Scripts\python -m unittest tests/test_complex_brain.py
-
-# 3. Duplicate Name Disambiguation & Interactive Deletion Suite
-.venv\Scripts\python -m unittest tests/test_deletion_disambiguation.py
-
-# 4. Multi-Candidate Open Disambiguation Suite
-.venv\Scripts\python -m unittest tests/test_open_disambiguation.py
-
-# 5. Zero-Path File Manager & D: Drive Intelligence Suite
-.venv\Scripts\python -m unittest tests/test_file_manager.py
-
-# 6. Installed Application Discovery & Launching Suite
-.venv\Scripts\python -m unittest tests/test_app_manager.py
-
-# 7. System Power & Battery Management Suite
-.venv\Scripts\python -m unittest tests/test_power_manager.py
-
-# 8. Brain End-to-End Intent & Integration Suite
-.venv\Scripts\python -m unittest tests/test_brain.py
+# Or run individual test modules:
+.venv\Scripts\python -m unittest tests/test_notes.py                 # Quick Notes CRUD & Persistence
+.venv\Scripts\python -m unittest tests/test_reminders.py             # Reminders & Duplicate Checks
+.venv\Scripts\python -m unittest tests/test_clipboard.py             # Clipboard & Secret Masking
+.venv\Scripts\python -m unittest tests/test_system_diagnostics.py    # Hardware Diagnostics
+.venv\Scripts\python -m unittest tests/test_scheduler.py             # Task Scheduler & Policies
+.venv\Scripts\python -m unittest tests/test_phase4_integration.py     # End-to-End Phase 4 Integration
+.venv\Scripts\python -m unittest tests/test_memory_and_history.py    # Memory, Audit & Undo
+.venv\Scripts\python -m unittest tests/test_phase1_pipeline.py       # Planner, Policy & Verification
 ```

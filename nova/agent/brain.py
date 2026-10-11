@@ -523,99 +523,139 @@ class NovaBrain:
         self._record_history(utterance, res)
         return res
 
-    def _get_help_text(self) -> str:
-        """Returns the complete Nova command manual."""
-        return (
-            "==========================================================================\n"
-            "               NOVA VIRTUAL ASSISTANT - COMMAND REFERENCE\n"
-            "==========================================================================\n\n"
-            "[APPLICATION MANAGEMENT]\n"
-            " • open <app>                   Launch any installed app (e.g. 'open chrome', 'start notepad')\n"
-            " • launch / run <app>           Synonyms for launch (e.g. 'launch calculator', 'run terminal')\n"
-            " • open app <name>              Explicit app targeting (e.g. 'open app spotify')\n\n"
-            "[ZERO-PATH FILE & FOLDER INTELLIGENCE]\n"
-            " • create folder <name>         Create in D: drive default (e.g. 'create folder Projects')\n"
-            " • create folder <name> in <p>  Create in specific folder (e.g. 'create folder Notes inside Projects')\n"
-            " • create file <name>           Create empty file in D: (e.g. 'create file todo.txt')\n"
-            " • create file <name> with...   Create with text (e.g. 'create file notes.txt with content 'Hi'')\n"
-            " • create file ... inside <p>   Create in specific folder (e.g. 'create file log.txt inside Logs')\n"
-            " • rename file/folder <a> to <b> Rename anywhere on PC (e.g. 'rename file draft.txt to final.txt')\n"
-            " • copy file/folder <a> to <dest> Auto-resolves destination (e.g. 'copy file report.pdf to Backup')\n"
-            " • move file/folder <a> to <dest> Auto-resolves destination (e.g. 'move file data.csv to Archive')\n"
-            " • delete file/folder <name>    Safe delete to Recycle Bin (e.g. 'delete file temp.log')\n"
-            " • delete ... permanently       Permanent deletion (e.g. 'delete folder Cache permanently')\n"
-            " * Disambiguation & Confirmation: If duplicate names exist across drives, Nova asks you\n"
-            "   to select the exact path [1-N] and confirms before deleting.\n\n"
-            "[UNIVERSAL OPEN (APPS, FILES & FOLDERS)]\n"
-            " • open <name>                  Discovers and opens matching app, file, or folder\n"
-            " • open file / open folder <n>  Explicit type filtering (e.g. 'open file budget.xlsx')\n"
-            " * Disambiguation: If multiple items match, Nova displays choices and confirms before opening.\n\n"
-            "[UNIVERSAL SEARCH & DISCOVERY]\n"
-            " • find app <name>              Search installed applications (e.g. 'find app spotify')\n"
-            " • find file <name>             Search files across all drives (e.g. 'find file budget.xlsx')\n"
-            " • find folder <name>           Search directories across drives (e.g. 'find folder Documents')\n"
-            " • find / search <query>        Search everything across all logical drives\n\n"
-            "[COMPLEX & COMPOUND COMMANDS]\n"
-            " • Multi-step chaining          Connect actions with 'and', 'then', 'and then', or ';'\n"
-            "   Examples:\n"
-            "   - 'Make a folder Demo in Project folder and create a file xyz.txt'\n"
-            "   - 'Create folder TestSuite in D: drive and create file results.txt with content 'Passed' inside TestSuite'\n"
-            "   - 'create folder Vault then create file keys.txt inside Vault'\n\n"
-            "[PERSISTENT MEMORY & USER PREFERENCES]\n"
-            " • remember that my NOVA project is in <path>  Store persistent project location\n"
-            " • remember that alias <name> is <app>         Store custom app alias\n"
-            " • remember that <key> is <value>              Store persistent user preference\n"
-            " • what do you remember / recall <key>         Inspect saved memories\n"
-            " • forget my <name> project / forget <key>     Remove specific saved memory\n"
-            " • clear memories / forget everything          Wipe all stored preferences\n\n"
-            "[ACTION HISTORY & AUDIT LOGS]\n"
-            " • what did you do today / what files did you move today  Audit log of past actions\n"
-            " • show action history                         Inspect recent executed operations\n\n"
-            "[UNDO & RECOVERY]\n"
-            " • undo / undo the last action / undo last move Safely restores previous reversible state\n"
-            " * Pre-flight safety: Validates source existence and avoids destination collisions before rollback.\n\n"
-            "[QUICK NOTES & SCRATCHPAD]\n"
-            " • save note <content>          Save quick note across restarts (e.g. 'save note revise OS')\n"
-            " • list notes                   Display all saved scratchpad notes\n"
-            " • search notes for <query>     Keyword search across notes\n"
-            " • read / get note <id>         View full contents of a note\n"
-            " • update note <id> with <text> Edit or append to note\n"
-            " • delete note <id>             Delete note (reversible via undo)\n\n"
-            "[REMINDERS & TASK TRACKING]\n"
-            " • remind me at <time> to <act> Set time-based reminder (e.g. 'remind me at 8 PM to revise OS')\n"
-            " • remind me in <duration> to.. Relative reminder (e.g. 'remind me in 15 minutes to take break')\n"
-            " • list reminders               Show pending reminders\n"
-            " • complete reminder <id>       Mark reminder finished\n"
-            " • dismiss reminder <id>        Dismiss active alert\n\n"
-            "[CLIPBOARD UTILITIES]\n"
-            " • read clipboard               Inspect current clipboard with privacy checks\n"
-            " • copy <text> to clipboard     Set system clipboard content\n"
-            " • clear clipboard              Securely wipe sensitive clipboard data\n"
-            " • save clipboard as note       Convert current clipboard text into a persistent note\n\n"
-            "[SYSTEM DIAGNOSTICS & HEALTH]\n"
-            " • check why PC is running slow Intelligent bottleneck diagnostics without killing processes\n"
-            " • system diagnostics           Complete CPU, RAM, disk, and top process overview\n\n"
-            "[SCHEDULED TASKS & AUTOMATION]\n"
-            " • every day at <time>, <action> Schedule approved action (e.g. 'Every day at 9 AM, open my college project')\n"
-            " • list scheduled tasks         Display recurring persistent task schedules\n"
-            " • cancel schedule <id>         Remove scheduled automation\n\n"
-            "[SUMMARIZATION (100% Local & Offline - Zero API Keys)]\n"
-            " • summarize this text: <text>  Summarize direct text via local Ollama or offline fallback\n"
-            " • summarize file <filename>    Extract & summarize contents of any document or file\n"
-            " • summarize context            Summarize conversational and session action history\n\n"
-            "[SYSTEM POWER & SESSION CONTROL]\n"
-            " • lock laptop                  Lock Windows workstation screen\n"
-            " • sleep laptop                 Put system into standby / sleep\n"
-            " • restart laptop [in X sec]    Restart system with optional countdown timer\n"
-            " • shutdown laptop [in X sec]   Power off system with optional countdown timer\n"
-            " • cancel shutdown              Abort scheduled shutdown or restart\n"
-            " • battery status               Display battery percentage, status, and remaining time\n\n"
-            "[ARCHITECTURE & TECH STACK]\n"
-            " • show language chart          Display 24-component JARVIS language architecture chart\n\n"
-            "[SESSION CONTROL]\n"
-            " • help                         Display this command reference manual\n"
-            " • exit / quit                  Shut down Nova session"
-        )
+    def _get_help_text(self, topic: Optional[str] = None) -> str:
+        """Returns full or topic-filtered Nova command manual."""
+        sections = {
+            "apps": (
+                "[APPLICATION MANAGEMENT]\n"
+                " • open <app>                   Launch any installed app (e.g. 'open chrome', 'start notepad')\n"
+                " • launch / run <app>           Synonyms for launch (e.g. 'launch calculator', 'run terminal')\n"
+                " • open app <name>              Explicit app targeting (e.g. 'open app spotify')\n"
+                " • open <name>                  Discovers and opens matching app, file, or folder with disambiguation"
+            ),
+            "files": (
+                "[ZERO-PATH FILE & FOLDER INTELLIGENCE]\n"
+                " • create folder <name>         Create in D: drive default (e.g. 'create folder Projects')\n"
+                " • create folder <name> in <p>  Create in specific folder (e.g. 'create folder Notes inside Projects')\n"
+                " • create file <name>           Create empty file in D: (e.g. 'create file todo.txt')\n"
+                " • create file <name> with...   Create with text (e.g. 'create file notes.txt with content 'Hi'')\n"
+                " • create file ... inside <p>   Create in specific folder (e.g. 'create file log.txt inside Logs')\n"
+                " • rename file/folder <a> to <b> Rename anywhere on PC (e.g. 'rename file draft.txt to final.txt')\n"
+                " • copy file/folder <a> to <dest> Auto-resolves destination (e.g. 'copy file report.pdf to Backup')\n"
+                " • move file/folder <a> to <dest> Auto-resolves destination (e.g. 'move file data.csv to Archive')\n"
+                " • delete file/folder <name>    Safe delete to Recycle Bin with duplicate disambiguation\n"
+                " • delete ... permanently       Permanent deletion (e.g. 'delete folder Cache permanently')"
+            ),
+            "search": (
+                "[UNIVERSAL SEARCH & DISCOVERY]\n"
+                " • find app <name>              Search installed applications (e.g. 'find app spotify')\n"
+                " • find file <name>             Search files across all drives (e.g. 'find file budget.xlsx')\n"
+                " • find folder <name>           Search directories across drives (e.g. 'find folder Documents')\n"
+                " • find / search <query>        Search everything across all logical drives"
+            ),
+            "compound": (
+                "[COMPLEX & COMPOUND COMMANDS]\n"
+                " • Multi-step chaining          Connect actions with 'and', 'then', 'and then', or ';'\n"
+                "   Examples:\n"
+                "   - 'Make a folder Demo in Project folder and create a file xyz.txt'\n"
+                "   - 'Create folder TestSuite in D: drive and create file results.txt with content 'Passed' inside TestSuite'\n"
+                "   - 'create folder Vault then create file keys.txt inside Vault'"
+            ),
+            "memory": (
+                "[PERSISTENT MEMORY & USER PREFERENCES]\n"
+                " • remember that my NOVA project is in <path>  Store persistent project location\n"
+                " • remember that alias <name> is <app>         Store custom app alias\n"
+                " • remember that <key> is <value>              Store persistent user preference\n"
+                " • what do you remember / recall <key>         Inspect saved memories\n"
+                " • forget my <name> project / forget <key>     Remove specific saved memory\n"
+                " • clear memories / forget everything          Wipe all stored preferences"
+            ),
+            "history": (
+                "[ACTION HISTORY & AUDIT LOGS]\n"
+                " • what did you do today / what files did you move today  Audit log of past actions\n"
+                " • show action history                         Inspect recent executed operations\n\n"
+                "[UNDO & RECOVERY]\n"
+                " • undo / undo the last action / undo last move Safely restores previous reversible state\n"
+                " * Pre-flight safety: Validates source existence and destination non-collision before rollback."
+            ),
+            "notes": (
+                "[QUICK NOTES & SCRATCHPAD]\n"
+                " • save note <content>          Save quick note across restarts (e.g. 'save note revise OS')\n"
+                " • list notes                   Display all saved scratchpad notes\n"
+                " • search notes for <query>     Keyword search across notes\n"
+                " • read / get note <id>         View full contents of a note\n"
+                " • update note <id> with <text> Edit or append to note\n"
+                " • delete note <id>             Delete note (reversible via undo)"
+            ),
+            "reminders": (
+                "[REMINDERS & TASK TRACKING]\n"
+                " • remind me at <time> to <act> Set time-based reminder (e.g. 'remind me at 8 PM to revise OS')\n"
+                " • remind me in <duration> to.. Relative reminder (e.g. 'remind me in 15 minutes to take break')\n"
+                " • list reminders               Show pending reminders\n"
+                " • complete reminder <id>       Mark reminder finished\n"
+                " • dismiss reminder <id>        Dismiss active alert\n"
+                " • clear completed reminders    Prune finished reminders"
+            ),
+            "clipboard": (
+                "[CLIPBOARD UTILITIES]\n"
+                " • read clipboard               Inspect current clipboard with privacy checks & masking\n"
+                " • copy <text> to clipboard     Set system clipboard content\n"
+                " • clear clipboard              Securely wipe sensitive clipboard data\n"
+                " • save clipboard as note       Convert current clipboard text into a persistent note"
+            ),
+            "diagnostics": (
+                "[SYSTEM DIAGNOSTICS & HEALTH]\n"
+                " • check why PC is running slow Intelligent bottleneck diagnostics without killing processes\n"
+                " • system diagnostics           Complete CPU, RAM, disk, and top process overview"
+            ),
+            "scheduler": (
+                "[SCHEDULED TASKS & AUTOMATION]\n"
+                " • every day at <time>, <action> Schedule approved action (e.g. 'Every day at 9 AM, open my college project')\n"
+                " • list scheduled tasks         Display recurring persistent task schedules\n"
+                " • cancel schedule <id>         Remove scheduled automation"
+            ),
+            "power": (
+                "[SYSTEM POWER & SESSION CONTROL]\n"
+                " • lock laptop                  Lock Windows workstation screen\n"
+                " • sleep laptop                 Put system into standby / sleep\n"
+                " • restart laptop [in X sec]    Restart system with optional countdown timer\n"
+                " • shutdown laptop [in X sec]   Power off system with optional countdown timer\n"
+                " • cancel shutdown              Abort scheduled shutdown or restart\n"
+                " • battery status               Display battery percentage, status, and remaining time"
+            ),
+        }
+
+        if topic:
+            t = topic.lower().strip()
+            for key, content in sections.items():
+                if t in key or key in t:
+                    header = "==========================================================================\n"
+                    header += f"               NOVA HELP MANUAL: {key.upper()}\n"
+                    header += "==========================================================================\n\n"
+                    return header + content
+
+        # Full command manual
+        full = [
+            "==========================================================================",
+            "               NOVA VIRTUAL ASSISTANT - COMMAND REFERENCE",
+            "==========================================================================\n",
+        ]
+        for sec in sections.values():
+            full.append(sec + "\n")
+
+        full.append("[SUMMARIZATION (100% Local & Offline - Zero API Keys)]")
+        full.append(" • summarize this text: <text>  Summarize direct text via local Ollama or offline fallback")
+        full.append(" • summarize file <filename>    Extract & summarize contents of any document or file")
+        full.append(" • summarize context            Summarize conversational and session action history\n")
+
+        full.append("[ARCHITECTURE & TECH STACK]")
+        full.append(" • show language chart          Display 24-component JARVIS language architecture chart\n")
+
+        full.append("[SESSION CONTROL]")
+        full.append(" • help [topic]                 Display full reference or topic-specific help")
+        full.append(" • exit / quit                  Shut down Nova session cleanly")
+
+        return "\n".join(full)
 
     def _record_history(self, utterance: str, result: Dict[str, Any]) -> None:
         """Records processed interaction in session history."""
@@ -644,11 +684,13 @@ class NovaBrain:
 
         # 1. Help
         if intent == NovaIntent.HELP or raw_clean.lower() == "help":
-            help_text = self._get_help_text()
+            topic = parsed.get("topic")
+            help_text = self._get_help_text(topic=topic)
             result = {
                 "intent": NovaIntent.HELP,
                 "success": True,
                 "response": help_text,
+                "topic": topic,
             }
             self._record_history(utterance, result)
             return result

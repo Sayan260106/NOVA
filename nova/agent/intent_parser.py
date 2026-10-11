@@ -140,6 +140,16 @@ class IntentParser:
         raw_text = raw or text
         cleaned = re.sub(r"^(hey\s+nova|nova|please|could\s+you|can\s+you)\b[,:\s]*", "", text, flags=re.IGNORECASE).strip()
 
+        # 0. Help & Documentation Intents
+        m_help = re.match(
+            r"^(?:please\s+)?(?:help(?:\s+me)?|commands|show\s+help|what\s+can\s+you\s+do|manual|man)(?:\s+(?:with\s+|for\s+|about\s+)?([\w\s]+))?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if m_help:
+            topic = m_help.group(1).strip().lower() if m_help.group(1) else None
+            return {"intent": NovaIntent.HELP, "topic": topic}
+
         # 1. Power & Session Intents
         if re.search(r"\b(lock\b|(?:lock|make)\s+(?:the\s+)?(?:laptop|screen|workstation|pc|computer|system))\b", cleaned, re.IGNORECASE):
             return {"intent": NovaIntent.LOCK_SYSTEM}
